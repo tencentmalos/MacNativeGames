@@ -6,6 +6,10 @@ one without a BKTR section, the update's is the one with it, both with the game'
 base NCA in place (its bounded base-file hook), so only the update NCA is copied. Keys stay in memory or in private
 temporary files; nothing prints them. All six IVFC levels of the result are verified and its files indexed.
 usage: extract_romfs.py <game file> [--update <update NSP>] --keys <prod.keys> --hactool <pinned hactool> --output <new folder>
+       [--update-nca <name>] [--base-copy]
+--update-nca picks the update when the game file holds several (some cards carry two cumulative updates); --base-copy
+copies the base Program NCA out instead of reading it in place, for a hactool built without this project's macOS-only
+bounded base-file and title-key hooks (Linux, WSL). It needs about 15 GiB more free space.
 """
 import argparse
 import hashlib
@@ -28,7 +32,7 @@ from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 TITLE = '01007EF00011E000'
 
 
-def programs(game, keys, update_file=None):
+def programs(game, keys, update_file=None, update_nca=None):
     inputs, tickets = [], {}
     for source in dict.fromkeys((game, update_file or game)):
         with source.open('rb') as f:
@@ -41,6 +45,9 @@ def programs(game, keys, update_file=None):
     bktr = lambda h: [i for i in range(4) if h[0x400 + i * 512 + 4] == 4]
     base = [(s, r, h) for s, r, h in inputs if s == game and not bktr(h)]
     update = [(s, r, h) for s, r, h in inputs if s == (update_file or game) and bktr(h)]
+    if update_nca:
+        require(any(r['name'] == update_nca for _, r, _ in update), f'No update Program NCA named {update_nca}')
+        update = [(s, r, h) for s, r, h in update if r['name'] == update_nca]
     require(len(base) == 1 and len(update) == 1, f'Expected one base and one update Program NCA of {TITLE}')
     require(len(bktr(update[0][2])) == 1, 'Expected one BKTR section')
     for _, _, h in base + update:
@@ -55,11 +62,14 @@ def main():
     ap.add_argument('--keys', required=True, type=Path)
     ap.add_argument('--hactool', required=True, type=Path)
     ap.add_argument('--output', required=True, type=Path)
+    ap.add_argument('--update-nca', help='name of the update Program NCA to merge, when the game file holds several')
+    ap.add_argument('--base-copy', action='store_true', help='copy the base NCA out (hactool without the bounded base-file hook)')
     a = ap.parse_args()
     require(not a.output.exists(), 'Output exists')
-    base, update, section, tickets = programs(a.game, load_keys(a.keys), a.update)
+    base, update, section, tickets = programs(a.game, load_keys(a.keys), a.update, a.update_nca)
     a.output.parent.mkdir(parents=True, exist_ok=True)
-    require(shutil.disk_usage(a.output.parent).free > update['size'] + 16 * (1 << 30), 'Need about 17 GiB free')
+    extra = base['size'] if a.base_copy else 0
+    require(shutil.disk_usage(a.output.parent).free > update['size'] + extra + 16 * (1 << 30), 'Not enough free space')
     with tempfile.TemporaryDirectory(prefix='update-merge-', dir=a.output.parent) as tmp:
         tmp = Path(tmp)
         keyfile = tmp / 'title.keys'
@@ -72,9 +82,19 @@ def main():
         result.mkdir()
         hactool_keys = tmp / 'hactool.keys'
         hactool_prod_keys(a.keys, hactool_keys)
-        env = dict(os.environ, MNG_TITLE_KEYS=str(keyfile), MNG_BASE_RANGE_OFFSET=str(record_offset(base)), MNG_BASE_RANGE_SIZE=str(base['size']))
-        command = [str(a.hactool.resolve()), '-x', '-y', '--disablekeywarns', '--suppresskeys', '-k', str(hactool_keys.resolve()),
-                   '--basenca=' + str(a.game.resolve()), f'--section{section}=' + str(result / 'romfs.bin'), str(tmp / 'update.nca')]
+        if a.base_copy:
+            # A stock hactool reads title keys only from $HOME/.switch/title.keys and only without --suppresskeys.
+            copy_range(a.game, record_offset(base), base['size'], tmp / 'base.nca')
+            home = tmp / 'home'
+            (home / '.switch').mkdir(parents=True)
+            shutil.copy2(keyfile, home / '.switch' / 'title.keys')
+            env = dict(os.environ, HOME=str(home))
+            command = [str(a.hactool.resolve()), '-x', '-y', '--disablekeywarns', '-k', str(hactool_keys.resolve()),
+                       '--basenca=' + str(tmp / 'base.nca'), f'--section{section}=' + str(result / 'romfs.bin'), str(tmp / 'update.nca')]
+        else:
+            env = dict(os.environ, MNG_TITLE_KEYS=str(keyfile), MNG_BASE_RANGE_OFFSET=str(record_offset(base)), MNG_BASE_RANGE_SIZE=str(base['size']))
+            command = [str(a.hactool.resolve()), '-x', '-y', '--disablekeywarns', '--suppresskeys', '-k', str(hactool_keys.resolve()),
+                       '--basenca=' + str(a.game.resolve()), f'--section{section}=' + str(result / 'romfs.bin'), str(tmp / 'update.nca')]
         with (result / 'merge.log').open('w') as log:
             code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
         text = (result / 'merge.log').read_text()

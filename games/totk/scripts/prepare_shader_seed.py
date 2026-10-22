@@ -500,7 +500,7 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
                     reply = json.loads(response)
                     code_path.unlink()
                     if reply.get('ok'):
-                        refl = json.loads((staging/(variant+'_b.json')).read_text())
+                        refl = json.loads((staging/(variant+'_b.json')).read_text(encoding='utf-8'))
                         if refl['chain'] != CHAIN or refl['stage'] != stage:
                             raise ValueError('prepared shader identity mismatch')
                         deps = json.dumps(refl['deps'], sort_keys=True, separators=(',', ':'))

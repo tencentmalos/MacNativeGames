@@ -24,3 +24,6 @@ games/totk/tools/totk_xlate/obj/
 games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
+# translator builds for other platforms (games/totk/tools/totk_xlate/publish_native.py); only macos-arm64 ships
+games/totk/prebuilt/win-*/
+games/totk/prebuilt/linux-*/
