@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "botw160": {
+      "manifest_sha256": "30513eed53bc4ae9bd1539c9e28dbffdb859b9c2c054fefd05aa9e0de3054f38",
+      "rewriter_sha256": "e884f3e68d468fd429dc9dd3e9f3dcf2c6a3498487b910e09ca15bac118bf863",
+      "call_window_sha256": "d54dbbba6cab4d116d3db2a30f32423030226d17d63f884b6dc604dfbd31f4d7",
+      "modules": [
+        {
+          "name": "main",
+          "build_id": "8e9978d50bdd20b4c8395a106c27ffde00000000000000000000000000000000",
+          "source_sha256": "15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+          "sha256": "cf5d57a21cd85a627de7c9c500957d971b81b6aebbc3360ed78edbe350b41884",
+          "file_size": 48355632
+        },
+        {
+          "name": "subsdk0",
+          "build_id": "93ff8252d975adf07230cb86c83301c53f2804df000000000000000000000000",
+          "source_sha256": "d22d98656a19be240b554e7db8d69126d6427232521238d665aec3509087f2cf",
+          "sha256": "6e19c1bb8cc42ad6be97e736bd58e4239bd01a3e8af025b4d689bab8c4bede7b",
+          "file_size": 8028660
+        },
+        {
+          "name": "sdk",
+          "build_id": "fcf93a41b08c5193a1410d262602dc621617c56f000000000000000000000000",
+          "source_sha256": "754cf4b581d749fbe3d457cf66497b141ef994cf592d247919d64a37dcc30d27",
+          "sha256": "02b3338325c096c8c21b55d5867f916566f46a0f257a189998e7b2ccd2a32924",
+          "file_size": 14004372
+        }
+      ]
+    },
+    "totk100": {
+      "manifest_sha256": "8878725de0e5776b4dbec4654dbaec1c5cb5484f395a24796e6ab7f2ffe898d0",
+      "rewriter_sha256": "e884f3e68d468fd429dc9dd3e9f3dcf2c6a3498487b910e09ca15bac118bf863",
+      "call_window_sha256": "d54dbbba6cab4d116d3db2a30f32423030226d17d63f884b6dc604dfbd31f4d7",
+      "modules": [
+        {
+          "name": "main",
+          "build_id": "082ce09b06e33a123cb1e2770f5f9147709033db000000000000000000000000",
+          "source_sha256": "faf81f8a609ff61a6322d04948132b5929af9f6e2398e0e0ebbe819b8ba3eaab",
+          "sha256": "1f3ad0b22edfff6e4eec14511e2e6cf04810bc40ad2381a3b694e4820f0de55f",
+          "file_size": 118609820
+        },
+        {
+          "name": "subsdk0",
+          "build_id": "a6bb7c6ffa9673769fa74ed3d7b054191f25d29c000000000000000000000000",
+          "source_sha256": "9d04c98997977e99c12a48a2dbfd3064b8da96b5152e0119064957a43f6c3f99",
+          "sha256": "4bbcfa921ba8d93aaafd034ffc5ef2f0efc4bf1c025ecf957dbd41eaae03b983",
+          "file_size": 7467952
+        },
+        {
+          "name": "sdk",
+          "build_id": "b9046c31eb5d31271be970fe732d38df49c6aa21000000000000000000000000",
+          "source_sha256": "91573d4444d0dcd07080db78fece2b098b76080d77cdb2e1d301a2a41d7c4eea",
+          "sha256": "592bb1955d74fd31040c6e92f8cba06b5e3c2bf35514e7cff261575f32823ca9",
+          "file_size": 15921016
+        }
+      ]
+    }
+  }
+}

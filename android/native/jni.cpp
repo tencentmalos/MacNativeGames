@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "input.h"
 #include "platform.h"
+#include "guest_runtime.h"
 #include <jni.h>
 #include <cmath>
 #include <chrono>
@@ -8,6 +9,15 @@
 #include <cstdio>
 using namespace spatial::input;
 #define JNI(name) Java_org_macnative_android_Native_##name
+extern "C" JNIEXPORT jstring JNICALL JNI(modules)(JNIEnv* e,jobject,jstring directory,jstring title,jboolean execute) {
+    if(!directory || !title)return e->NewStringUTF("{\"status\":\"fail\",\"error\":\"Missing module path or title\"}");
+    const char* d=e->GetStringUTFChars(directory,nullptr);if(!d)return nullptr;
+    std::string path(d);e->ReleaseStringUTFChars(directory,d);
+    const char* t=e->GetStringUTFChars(title,nullptr);if(!t)return nullptr;
+    std::string profile(t);e->ReleaseStringUTFChars(title,t);
+    const auto report=execute?mng::probe_modules(path,profile):mng::validate_modules(path,profile);
+    return e->NewStringUTF(report.c_str());
+}
 extern "C" JNIEXPORT jlong JNICALL JNI(begin)(JNIEnv*,jobject) { return mng::input.begin(); }
 extern "C" JNIEXPORT void JNICALL JNI(end)(JNIEnv*,jobject,jlong token) { mng::input.end(token); }
 template<class T,class A> std::vector<T> array(JNIEnv* env,A a);

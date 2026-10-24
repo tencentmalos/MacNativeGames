@@ -2,6 +2,7 @@
 package org.macnative.android
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -10,6 +11,7 @@ import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ScrollView
 import java.util.concurrent.Executors
 import spatial.input.android.AndroidInputSource
 import spatial.input.android.InputSink
@@ -23,6 +25,7 @@ object Native {
     external fun packet(token: Long, id: Long, epoch: Long, sequence: Long, control: Int, kinds: IntArray, codes: IntArray, values: FloatArray): Boolean
     external fun status(): String
     external fun audioProbe(): String
+    external fun modules(directory: String, title: String, execute: Boolean): String
 }
 
 class PlatformActivity : Activity() {
@@ -31,15 +34,40 @@ class PlatformActivity : Activity() {
     private var collector: AndroidInputSource? = null
     private var token = 0L
     private lateinit var state: TextView
+    private lateinit var work: RuntimeWork
+    private lateinit var runtimeState: TextView
+    private lateinit var importButton: Button
+    private lateinit var verifyButton: Button
+    private lateinit var shareButton: Button
+    private val workChanged: () -> Unit = {
+        runtimeState.text = work.status
+        importButton.isEnabled = !work.busy
+        verifyButton.isEnabled = !work.busy && work.store.selected() != null
+        shareButton.isEnabled = work.report.isNotEmpty()
+    }
     private val poll = object : Runnable {
         override fun run() { state.text = Native.status(); handler.postDelayed(this, 100) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        work = RuntimeWork.get(this)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32,64,32,32) }
         column.addView(TextView(this).apply {
-            text = "${applicationInfo.loadLabel(packageManager)}\n\nFoundation controller and audio validation.\nGame startup and Vulkan rendering are not connected yet.\n"
+            text = "${applicationInfo.loadLabel(packageManager)}\n\nDevelopment preview — gameplay is not available yet.\nImport your prepared ${getString(R.string.game_version)} module folder, then verify the native runtime.\n"
         })
+        runtimeState = TextView(this); column.addView(runtimeState)
+        importButton = Button(this).apply {
+            text = "Import prepared modules"
+            setOnClickListener {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), 10)
+            }
+        }; column.addView(importButton)
+        verifyButton = Button(this).apply { text = "Verify native runtime"; setOnClickListener { work.run() } }; column.addView(verifyButton)
+        shareButton = Button(this).apply {
+            text = "Share verification report"
+            setOnClickListener { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, work.report), "Runtime verification report")) }
+        }; column.addView(shareButton)
         state = TextView(this);column.addView(state)
         column.addView(Button(this).apply {
             text = "Play 250 ms audio test"
@@ -51,7 +79,13 @@ class PlatformActivity : Activity() {
                 }
             }
         })
-        setContentView(column)
+        setContentView(ScrollView(this).apply { addView(column) })
+        work.observe(workChanged)
+    }
+    @Deprecated("Activity result compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 10 && resultCode == RESULT_OK) data?.data?.let { work.import(it) }
     }
     override fun onResume() {
         super.onResume()
@@ -81,7 +115,7 @@ class PlatformActivity : Activity() {
         Native.end(token);token = 0
         super.onPause()
     }
-    override fun onDestroy() { executor.shutdown();super.onDestroy() }
+    override fun onDestroy() { work.remove(workChanged);executor.shutdown();super.onDestroy() }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) collector?.onFocusLost()

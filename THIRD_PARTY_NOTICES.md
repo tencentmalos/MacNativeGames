@@ -40,6 +40,9 @@ is copied into this repository.
 - Android ABI emitter adaptations: `jhaizhou-ops/d2r-mobile` at
   `758f5d41509af5cd38b7eb934bc2334bdb3e3342`, MIT, Copyright 2026 jhaizhou.
   The existing `games/totk/third_party/d2r/LICENSE` carries this notice.
+- `android/third_party/d2r/sha256.c`, `sha256.h` and the syntax conversion in
+  `android/tools/asm_elf.py`: adapted from D2R Mobile at the same `758f5d4`
+  revision, MIT. The SHA-256 subset retains its license beside the source.
 
 The Android study builds are local development artifacts, not a binary release.
 Their source dependencies and applicable notices must accompany any distribution.

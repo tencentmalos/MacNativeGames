@@ -9,10 +9,10 @@ Measured results and remaining game-runtime work: [VALIDATION.md](VALIDATION.md)
 
 ## Current boundary
 
-The two APK flavors are **platform validation applications**, not playable game
-ports. They exercise the actual Foundation controller collector, InputHub, JNI
-bridge and Oboe output. The UI states that game startup and Vulkan rendering are
-not connected; there is no fake game launch path. No game modules, keys, saves,
+The two APK flavors are **native runtime previews**, not playable game ports.
+They load the player's prepared modules and run original SDK functions through
+the Android gates, plus the Foundation controller collector, InputHub, JNI bridge
+and Oboe output. The UI states that gameplay is unavailable. No game modules, keys, saves,
 RomFS files or translated shaders are packaged.
 
 Implemented:
@@ -23,6 +23,15 @@ Implemented:
 - Android-safe BLR x18 windows preserve the original return PC. The existing
   Apple default remains; Android images carry TARGET_ANDROID in their layout
   and the Apple table generator rejects them.
+- Private folder import with an atomic selected-generation record. A failed
+  import preserves the original source and previous working generation.
+- SHA-256-pinned Android manifests and module images, module relocation and
+  import resolution, RX/RW separation, guarded stacks and per-thread Bionic TLS
+  verification. Guest mappings remain within the Horizon 39-bit address range;
+  the allocator never overwrites an existing mapping.
+- Original main PLT -> SDK timer calls and original SDK `SleepThread` -> host
+  waits, on four independent guest stacks. Unsupported service gates stop instead
+  of returning fabricated success. Validation/import does not execute guest code.
 - Foundation Android controller collection and native InputHub, mapped by physical
   button position to Switch FullKey. Native session tokens and connection epochs
   reject stale input. Focus/pause ends the input session and releases buttons.
@@ -32,7 +41,8 @@ Implemented:
   before the mixer context is freed. The real mixer is compiled for Android as
   part of the APK build, but the full guest runtime is not linked into this APK.
 
-Not implemented: Android module loader/gates and Horizon runtime integration,
+Not implemented: original SDK initialization/constructors and complete Horizon
+thread, memory and IPC service integration,
 NVN-to-Vulkan connection and Zelda XGS generation, game lifecycle/saves/import,
 rumble dispatch, gyro and on-screen controls. Haptics are not advertised as a
 capability by the current native adapter. No Android Zelda FPS result exists.
@@ -77,6 +87,34 @@ Outputs must be a new directory outside Git. Each result records module Build
 ID, complete input hash, rewriter/call-window hashes, output hashes and exit
 status. A failed module makes the command fail after retaining the report.
 Emission alone is not equivalence, boot or gameplay validation.
+
+Package the verified rewrites for each APK (output directories must be new and
+outside Git):
+
+```sh
+python games/totk/android/package_modules.py --rewrite-report /private/rewrite/report.json \
+  --title botw160 --output /private/modules/botw160
+python games/totk/android/package_modules.py --rewrite-report /private/rewrite/report.json \
+  --title totk100 --output /private/modules/totk100
+```
+
+The packager derives relocations, symbols and the clock PLT from those exact
+modules. `expected-modules.json` pins the resulting manifest, source hashes,
+Build IDs and generator fingerprints. A changed generator requires preparation
+and hardware validation before updating the pins; changing a manifest's declared
+hashes cannot make an altered image acceptable to the APK.
+
+Copy the prepared folder to the device and select **Import prepared modules**
+in the matching app. This is a four-file module bundle, not an XCI/NSP importer
+or a RomFS/shader package. Import runs off the UI thread and survives Activity
+recreation. **Verify native runtime** runs 4,000 timer calls and four 15 ms SDK
+waits; it does not start the game. The last UI-run report is saved privately as
+`files/last-runtime-report.json` and can be shared as text.
+
+The device tests also exercise imports, corruption rejection, title rejection
+and repeated native sessions when a prepared folder has been imported (or is
+provided privately under the app's `files/test-input`). Without private modules
+the module test is explicitly skipped; the controller/audio tests still run.
 
 Synthetic differential tests (Unicorn is test-only):
 
