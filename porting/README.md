@@ -1,168 +1,96 @@
-# BOTW native port foundation
+# BOTW 原生移植底座
 
-BOTW Switch **1.6.0** is the only active porting target. TOTK's existing preview
-is retained, but is not advanced or used to accept this work. The working Mac
-implementation is the semantic/control-flow reference; Android is the new host.
-Neither a host call probe nor a successful APK build establishes gameplay.
+当前唯一推进的目标是 Switch 版 BOTW **1.6.0**。保留现有 TOTK 预览版，本阶段不继续推进，也不将其用于验收。已运行的 Mac 实现提供语义和控制流参考，Android 是新增宿主。宿主调用探针通过或 APK 构建成功，都不代表游戏已经运行。
 
-## What the Mac port actually changes
+## Mac 移植实际修改了哪些部分
 
-Inspected source: MacNativeGames upstream `5281186`, fork Android work through
-`c7fcac6`, plus the implementation in this directory. Original game identity is
-the existing BOTW source-hash manifest and main Build ID
-`8E9978D50BDD20B4C8395A106C27FFDE`. Module hashes, not repository names, gate use.
+本次检查的源码范围：MacNativeGames 上游 `5281186`、fork 中截至 `c7fcac6` 的 Android 工作，以及本目录实现。游戏身份由现有 BOTW 源文件哈希清单和 main Build ID `8E9978D50BDD20B4C8395A106C27FFDE` 确定。是否适用必须由模块哈希判定。
 
-| Layer | Existing Mac evidence | Porting decision |
+| 层次 | 现有 Mac 实现证据 | 移植决策 |
 | --- | --- | --- |
-| ARM64 ABI | `games/totk/third_party/d2r/patch_nso.py`, `call_window.py`: x18, TLS, timer/SVC gates, exclusive/call windows and jump tables | Keep one verified AOT pipeline with separate Darwin/Bionic emitters. Preserve Android's x18 and no-red-zone requirements. Never reuse an Apple rewrite as an Android image. |
-| Loader | `runtime/loader.c`, `scripts/prepare_runtime.py`: source/rewrite hashes, symbols, RELA/RELR, host overrides, guarded host stacks, W^X | Common identity and module metadata; host-specific reservation/protection and TLS. Check the whole image before linking. No silent weak/strong import substitution. |
-| Initialization | `loader.c`: original SDK Start, loader callback, each module's DT_INIT and state check, original nnMain | Explicit stage transitions; a missing SVC is a blocked stage, not successful initialization. BOTW 1.6.0 uses the four-argument Start export. |
-| Memory | `services.c`: 39-bit layout, heap/alias reservations, logical 4 KiB permissions, Darwin 16 KiB protection unions, QueryMemory | Port a guest memory model, not Mach APIs or literal Mac addresses. Physical host page size is a host adapter property. |
-| Threads/synchronization | `threads.c`, `gate.S`, `hle_stack.S`, `thread_enter.S`: thread handles, TLS, private host stacks, waits, priorities/virtual cores, preemption | Separate Horizon semantics from pthread/Mach/ucontext details. Start with deterministic wait/wake tests; signal preemption is a later capability. |
-| Correctness patch | `game_patches_botw.c`: strengthen matching exclusive load/store windows to acquire loads; optional job-queue diagnostics | A concrete compatibility candidate for Android, requiring exact-input enumeration plus concurrency validation. Do not mix it with FPS/output changes. |
-| Feature patches | `game_patches_botw.c`: real-time VFR, fade/UI timing, physics substeps, pad repeat, render/output size and aspect | Separate opt-in profile. Android boot baseline does not inherit Mac's defaults. Mac's existing behavior is preserved until migration has independent acceptance. |
-| Diagnostics | `loader.c` fault handling and bounded frame-chain reads; `game_patches_botw.c` BRK job-queue hooks; `threads.c` wait-state dumps | Native LLDB owns stops. Register guest identities and translation evidence with it. Diagnostic BRKs require exact provenance; no blanket SIGTRAP/SIGSEGV ignore policy. |
-| Graphics | `runtime/gfx_bridge.c`, `third_party/d2r_gfx/gfx/nvn/`: NVN bootstrap override, resources, state, shaders, submission | Share NVN semantics and resource identities; retain separate Metal/Vulkan host implementations. Do not port Metal object layouts into Android. |
-| Audio/input/files | `audio_mixer.c`, `input.c`, `fs_host.c`, `romfs.c` and frontend code | Foundation already provides Android input/audio. Keep guest protocol/mixer semantics distinct from host device callbacks and lifecycle. Preserve private saves and verified RomFS inputs. |
+| ARM64 ABI | `games/totk/third_party/d2r/patch_nso.py`、`call_window.py`：x18、TLS、计时器/SVC 跳板、独占访问/调用窗口和跳转表 | 保留经过验证的 AOT 流程，为 Darwin/Bionic 分别生成代码。满足 Android 的 x18 和无 red zone 要求，禁止将 Apple 重写产物当作 Android 映像。 |
+| 加载器 | `runtime/loader.c`、`scripts/prepare_runtime.py`：原始/重写哈希、符号、RELA/RELR、宿主覆盖、带保护页的宿主栈、W^X | 共用身份与模块元数据；地址预留、保护和 TLS 由宿主适配。链接前检查完整映像，不静默替换强弱导入。 |
+| 初始化 | `loader.c`：原始 SDK Start、加载器回调、各模块 DT_INIT 与状态检查、原始 nnMain | 明确记录阶段转换。缺少 SVC 时标记阻塞，不能宣称初始化成功。BOTW 1.6.0 使用四参数 Start 导出。 |
+| 内存 | `services.c`：39 位布局、堆/别名区预留、逻辑 4 KiB 权限、Darwin 16 KiB 页权限合并、QueryMemory | 移植 guest 内存模型。Mach API 和 Mac 地址留在宿主层，物理页大小属于宿主适配属性。 |
+| 线程与同步 | `threads.c`、`gate.S`、`hle_stack.S`、`thread_enter.S`：线程句柄、TLS、独立宿主栈、等待、优先级/虚拟核、抢占 | 将 Horizon 语义与 pthread/Mach/ucontext 细节分离。先验证确定性的等待/唤醒，再接入信号抢占。 |
+| 正确性补丁 | `game_patches_botw.c`：将匹配独占读写窗口中的读操作增强为 acquire；可选任务队列诊断 | 作为 Android 兼容性候选，必须针对精确输入枚举并验证并发行为。与帧率/输出修改分开管理。 |
+| 功能补丁 | `game_patches_botw.c`：实时 VFR、淡入淡出/UI 时序、物理子步、按键连发、渲染/输出尺寸和宽高比 | 使用单独的显式启用配置。Android 启动基线不继承 Mac 默认值；迁移独立验收前保留 Mac 行为。 |
+| 诊断 | `loader.c` 故障处理和有界帧链读取；`game_patches_botw.c` BRK 任务队列钩子；`threads.c` 等待状态转储 | 由原生 LLDB 管理停止，向其登记 guest 身份与转换证据。诊断 BRK 必须有精确来源，禁止统一忽略 SIGTRAP/SIGSEGV。 |
+| 图形 | `runtime/gfx_bridge.c`、`third_party/d2r_gfx/gfx/nvn/`：NVN bootstrap 覆盖、资源、状态、着色器、提交 | 共用 NVN 语义和资源身份，Metal/Vulkan 保留各自宿主实现。不能将 Metal 对象布局直接搬到 Android。 |
+| 音频、输入、文件 | `audio_mixer.c`、`input.c`、`fs_host.c`、`romfs.c` 和前端代码 | Foundation 已提供 Android 输入/音频。将 guest 协议/混音语义与宿主设备回调、生命周期分离，保留私有存档及已验证 RomFS 输入。 |
 
-The regenerated Mac BOTW probe in this work verified the existing instruction
-guards and reported 18,249 acquire upgrades in text and 63 in rewrite code. That
-is an observed inventory for this exact Mac input, **not** an Android patch list,
-and not proof of Android concurrency correctness. Existing Mac feature patches
-also ran in this probe; their output is not an Android baseline or performance
-measurement. Some upstream comments refer to `botw.md`, which is absent from this
-checkout; those references were not treated as additional evidence.
+本次重新生成的 Mac BOTW 探针通过了现有指令保护检查，记录到正文中 18,249 处、重写区中 63 处 acquire 升级。这仅是精确 Mac 输入的观测结果，**不能作为 Android 补丁清单或并发正确性证明**。探针也执行了现有 Mac 功能补丁，其输出不能用于 Android 基线或性能比较。部分上游注释引用了本检出中不存在的 `botw.md`，本次未将该引用视为额外证据。
 
-## Architecture and ownership
+## 架构与归属
 
 ```mermaid
 flowchart TD
-  Input[Private original BOTW files] --> Prepare[Identity checks and host-specific AOT rewrite]
-  Prepare --> Profile[Verified BOTW profile and private metadata]
-  Profile --> Loader[Load / patch transaction / relocate / seal]
-  Loader --> Guest[Original SDK and game ARM64]
-  Guest --> Horizon[Horizon memory / threads / IPC / filesystem]
-  Guest --> NVN[NVN resource and shader semantics]
-  Horizon --> Host[Darwin or Android host operations]
-  Horizon --> Foundation[Foundation input / audio / debug command registry]
-  NVN --> Metal[Metal backend]
-  NVN --> Vulkan[Vulkan backend]
-  Loader --> Registry[Versioned native debug descriptor]
+  Input[私有 BOTW 原始文件] --> Prepare[身份校验与宿主专用 AOT 重写]
+  Prepare --> Profile[已验证的 BOTW 配置与私有元数据]
+  Profile --> Loader[加载 / 补丁事务 / 重定位 / 权限封定]
+  Loader --> Guest[原始 SDK 与游戏 ARM64 代码]
+  Guest --> Horizon[Horizon 内存 / 线程 / IPC / 文件系统]
+  Guest --> NVN[NVN 资源与着色器语义]
+  Horizon --> Host[Darwin 或 Android 宿主操作]
+  Horizon --> Foundation[Foundation 输入 / 音频 / 调试命令注册表]
+  NVN --> Metal[Metal 后端]
+  NVN --> Vulkan[Vulkan 后端]
+  Loader --> Registry[带版本的原生调试描述符]
   Registry --> LLDB[Native-debugger MCP / LLDB]
-  Profile --> Resolver[Address and vendor-symbol resolver]
+  Profile --> Resolver[地址与原始厂商符号解析]
   LLDB --> Resolver
 ```
 
-`porting/runtime` is a small host-neutral library in this fork. It is not a new
-emulator kernel, CPU interpreter, debug server or online service. It currently
-contains patch preflight and the debugger publication ABI. The rest of the
-diagram is a migration boundary, not a claim that those systems are unified.
-Keep it local until BOTW proves the interfaces; only then consider promoting
-truly shared facilities to Foundation. Do not move title offsets into Foundation.
+`porting/runtime` 是本 fork 内的小型跨宿主库，目前包含补丁预检和调试元数据发布 ABI。它不承担模拟器内核、CPU 解释器、调试服务器或在线服务职责。图中其余部分描述迁移边界，并不表示已经完成统一。先由 BOTW 验证接口，再考虑将确实通用的设施迁入 Foundation；游戏专用偏移不进入 Foundation。
 
-The current Foundation checkout has input/audio and `DebugCommandRegistry` /
-`DumpsysBridge`, but no native-port guest-patch module. Future `port_status`,
-`port_modules`, and bounded diagnostic requests should use that command registry,
-enqueue work to the runtime owner and return promptly. Do not create another TCP
-control server or block Android's main/dumpsys thread on guest startup. The
-read-only LLDB descriptor does not require a command transport.
+当前 Foundation 有输入/音频和 `DebugCommandRegistry` / `DumpsysBridge`，尚无原生移植 guest patch 模块。后续 `port_status`、`port_modules` 及有界诊断请求应复用该注册表，将工作投递给运行时所有者后及时返回。不要另建 TCP 控制服务，也不要让 Android 主线程/dumpsys 线程等待 guest 启动。只读 LLDB 描述符不依赖命令传输。
 
-## Guest patch contract
+## Guest patch 约定
 
-The title-owned inventory is [BOTW guest patches](../games/botw/guest_patches/README.md).
-Its 12 entries include code patches, state hooks and host policies, with exact
-source identity, dependency/conflict relationships and separate Android acceptance.
-The catalog is not executable recipes; no pending entry is silently enabled.
+逐游戏清单位于 [BOTW guest patch 目录](../games/botw/guest_patches/README.md)。12 项条目涵盖代码补丁、状态钩子和宿主策略，记录精确源身份、依赖/冲突关系及独立 Android 验收要求。该清单不是可执行补丁，待验证条目不会被自动启用。
 
-Required AOT ABI rewrites remain in the existing generator. Small compatibility,
-feature and diagnostic instruction patches use distinct categories. For the
-first shared implementation, `apply_staged`:
+必要的 AOT ABI 重写仍由现有生成器负责。小型兼容性、功能和诊断指令补丁分别分类。首版公共实现 `apply_staged` 遵循以下约定：
 
-1. Accepts private writable staging bytes, before relocation, W^X sealing and
-   guest execution. It never changes page permissions or patches live code.
-2. Requires profile, host ABI, module name, original NSO Build ID/source SHA-256
-   and rewritten-image SHA-256. It computes the actual complete image digest.
-   Build IDs normalize only trailing zero **bytes**, not arbitrary prefixes.
-3. Enables only explicitly selected patch IDs. Features and diagnostics need an
-   additional category opt-in. A missing byte guard, reason or evidence fails.
-4. Checks all identities, bytes, extents, alignment, duplicate IDs and overlap
-   before writing anything. An error in the final patch cannot leave earlier
-   patches applied. It allocates the complete result/receipt before committing.
-5. Returns the full executable identity, input/output digests and each patch's ID, kind, module offset, size,
-   byte digests and rationale/provenance. Game bytes remain private.
+1. 只接收重定位、W^X 权限封定和 guest 执行之前的私有可写暂存数据；不改变页权限，不修改运行中的代码。
+2. 要求提供配置、宿主 ABI、模块名、原始 NSO Build ID/源 SHA-256 和重写映像 SHA-256，并计算完整映像的实际摘要。Build ID 仅规范化末尾零**字节**，不接受任意前缀匹配。
+3. 只启用显式选中的补丁 ID。功能和诊断类别还需要额外授权开关；缺少原字节保护、理由或证据即失败。
+4. 首次写入前检查全部身份、字节、范围、对齐、重复 ID 和重叠。最后一个补丁失败也不能让前面的补丁部分生效。提交前分配完整结果和应用记录。
+5. 返回完整可执行文件身份、输入/输出摘要，以及各补丁的 ID、类别、模块偏移、大小、字节摘要、理由与来源。游戏字节保留在私有目录。
 
-No BOTW gameplay patch has been moved into this engine yet. The Mac loader still
-uses its existing post-relocation patch code, and its debug snapshot explicitly
-reports that per-patch receipts are unavailable. Migrating those recipes must
-separate base-dependent fixups from static patches, verify original instructions
-against the exact NSO, account for rewrite-window overlap, and compare outputs
-before changing defaults. Do not hash a relocated image as if it were the pinned
-rewrite image. Enabling arbitrary private patches still requires regenerating
-and reviewing the runtime profile pins; no hash bypass was added.
+目前尚未将 BOTW 游戏补丁迁入该引擎。Mac 加载器仍使用现有的重定位后补丁代码，调试快照会明确指出逐补丁应用记录不可用。迁移时必须分离依赖基址的修正与静态补丁，针对精确 NSO 核对原指令，处理重写窗口重叠，并在改变默认值前比较结果。不能将重定位后的映像摘要当作固定的重写映像摘要。启用任意私有补丁仍需重新生成并审查运行时配置中的固定身份；没有增加绕过哈希校验的路径。
 
-## Native debugger contract
+## 原生调试器约定
 
-Use the existing native-debugger MCP for host launch/attach, native breakpoints,
-registers, memory, stepping, signal policy and evidence. Anonymous AOT mappings
-are not ordinary ELF/Mach-O images, and the host ELF Build ID/Mach-O UUID is not
-the game's NSO Build ID. No emulator RSP endpoint is needed for native execution.
+复用现有 native-debugger MCP 管理宿主启动/附加、原生断点、寄存器、内存、单步、信号策略和证据。匿名 AOT 映射不是普通 ELF/Mach-O 映像，宿主 ELF Build ID/Mach-O UUID 也不是游戏 NSO Build ID。原生执行不需要增加模拟器 RSP 端点。
 
-Set `MNG_PORT_DEBUG=1` for an explicit BOTW diagnostic run. Both BOTW loaders now
-publish the same host C ABI:
+显式诊断 BOTW 时设置 `MNG_PORT_DEBUG=1`。两端 BOTW 加载器发布相同的宿主 C ABI：
 
-- `mng_port_debug_descriptor`: ABI/version/size, even publication sequence,
-  load generation, payload address and bounded length. Unload clears it before
-  Android mappings/TLS keys are destroyed; another owner cannot replace it.
-- `mng_port_debug_checkpoint`: a stable function breakpoint after publication.
-  It neither raises SIGTRAP nor waits for a debugger during ordinary execution.
-- JSON payload: process ID, profile, host ABI, phase, manifest SHA-256 and each
-  loaded module's source/rewrite identity and mapped range. Android startup also
-  records its thread ID, guest stack/TLS/TLR and virtual x18 slot. Android's real
-  x18 remains a host platform register; it must not be reported as guest x18.
+- `mng_port_debug_descriptor`：ABI/版本/大小、偶数发布序号、加载代次、数据地址和有界长度。Android 映射/TLS key 销毁前清除描述符，其他所有者不能替换它。
+- `mng_port_debug_checkpoint`：发布后的稳定函数断点。正常执行时不触发 SIGTRAP，也不等待调试器。
+- JSON 数据：进程 ID、配置、宿主 ABI、阶段、清单 SHA-256，以及各模块的原始/重写身份和映射范围。Android 启动还记录线程 ID、guest 栈/TLS/TLR 和虚拟 x18 槽位。真实 x18 仍属于 Android 宿主平台，不能将其报告为 guest x18。
 
-At an all-threads-stopped native-debugger epoch, read the descriptor, then its
-payload (in bounded chunks), then the descriptor again. Require ABI 1, size 40,
-the same even sequence/generation/pointer/length and a live nonzero generation.
-Reject a stop inside publication rather than calling a target helper or taking
-a target lock. Retain the native debugger session, exact target token and stop
-epoch alongside the snapshot. A PID, address or generation alone is insufficient
-across restarts. Never evaluate a target function just to fetch metadata.
+在 native-debugger 的同一次全线程停止中，先读描述符，再分块读取有界数据，最后重读描述符。要求 ABI 1、大小 40，两次序号/代次/指针/长度完全相同，序号为偶数、代次非零且仍有效。如果停在发布过程内部，应拒绝该快照，不能通过调用目标辅助函数或获取目标锁来补救。快照必须保留调试会话、精确 target token 和 stop epoch；跨重启时仅有 PID、地址或代次不足以证明身份。禁止仅为读取元数据而调用目标函数。
 
-`tools/native_symbols.py` binds the captured snapshot to its exact private
-manifest. It resolves original-text locations and **exact** gate-return sites,
-then original vendor function symbols. A rewritten text location may contain a
-branch, and an interior rewrite PC without a source map stays `unknown`; no
-nearest-gate/nearest-symbol guess is made. It emits historical results requiring
-live target/stop revalidation before breakpoint changes. Full rewrite-window
-source maps, mixed stack unwinding, suspended guest-register reconstruction,
-thread/service wait graphs and a native-debugger provider adapter are **pending**.
+`tools/native_symbols.py` 将快照绑定到精确私有清单。先解析原始代码位置或**精确**跳板返回点，再解析原始厂商函数符号。原始正文位置可能已被改写为分支；缺少来源映射的重写区内部 PC 保持 `unknown`，不猜测最近跳板或符号。输出属于历史解析结果，修改断点前仍须重新验证实时目标和停止状态。完整重写窗口映射、混合栈回溯、挂起 guest 寄存器重建、线程/服务等待图以及 native-debugger provider 适配均**待完成**。
 
-For private offline investigation, additionally set `MNG_PORT_DEBUG_LOG=1` to
-emit the same bounded JSON snapshots at publication points. These stage logs do
-not confer live debugger ownership. They contain addresses/identities, not keys
-or game instruction bytes. Keep them outside Git.
+私有离线调查可额外设置 `MNG_PORT_DEBUG_LOG=1`，在发布点输出同样有界的 JSON 快照。阶段日志不能代替实时调试会话的控制权证明。日志含地址和身份，不含密钥或游戏指令字节，应保留在 Git 之外。
 
-The Mac manifest is generated by `games/totk/scripts/prepare_runtime.py` next to
-the existing private runtime tables as `port-debug-manifest.json`. Android uses
-its existing pinned `manifest.json`; packaging was not replaced.
+Mac 的 `port-debug-manifest.json` 由 `games/totk/scripts/prepare_runtime.py` 生成，放在现有私有运行时表旁。Android 继续使用已固定身份的 `manifest.json`，打包机制保持不变。
 
-## BOTW-only milestones
+## 仅针对 BOTW 的里程碑
 
-| Order | Next acceptance boundary | Evidence required |
+| 顺序 | 验收边界 | 所需证据 |
 | --- | --- | --- |
-| 0 (this change) | Module identity, patch transaction, shared debug ABI | Host/device core tests; original BOTW calls on Mac/Android; debugger all-stop read; wrong identity/overlap/stale-generation rejection |
-| 1 | Guest memory and startup | Reserved low VA/heap/alias ranges, logical pages vs host pages, accounting, no clobbering host maps; GetInfo and QueryMemory agree; original Start reaches its loader callback |
-| 2 | Threads and synchronization | Guest/host stack ownership, TLS/x18, waits/events/arbitration, cancellation and teardown; multi-thread negative tests and BOTW job-queue validation |
-| 3 | SDK initialization and services | Every DT_INIT confirmed, original nnMain reached; real IPC responses, RomFS and private save ownership; no successful unknown-service stubs |
-| 4 | First correct Vulkan frame | NVN resources/descriptors/sync, BOTW-specific offline SPIR-V and reflection; compare actual gameplay against Mac with version/scene evidence |
-| 5 | Performance and expansion | Correctness retained, cold/warm shader and pipeline costs measured; then consider another title such as TOTK |
+| 0（本次） | 模块身份、补丁事务、公共调试 ABI | 宿主/设备核心测试；Mac/Android 原始 BOTW 调用；调试器全停读取；拒绝错误身份、重叠和过期代次 |
+| 1 | Guest 内存与启动 | 低地址/堆/别名区预留，逻辑页与宿主页区分，内存记账，不覆盖宿主映射；GetInfo 与 QueryMemory 一致；原始 Start 到达加载器回调 |
+| 2 | 线程与同步 | Guest/宿主栈所有权、TLS/x18、等待/事件/仲裁、取消与销毁；多线程失败路径测试和 BOTW 任务队列验证 |
+| 3 | SDK 初始化与服务 | 确认每个 DT_INIT，进入原始 nnMain；真实 IPC 响应、RomFS 与私有存档所有权；未知服务不能伪造成功 |
+| 4 | 首个正确 Vulkan 帧 | NVN 资源/描述符/同步、BOTW 专用离线 SPIR-V 与反射；保留版本和场景证据后与 Mac 实际游戏比较 |
+| 5 | 性能与扩展 | 保持正确性，测量冷/热着色器及管线开销；再考虑 TOTK 等其他游戏 |
 
-BOTW currently stops at `GetInfo(AslrRegionAddress)` after its entropy requests.
-The next implementation is milestone 1, using the debugger/identity facilities
-above. A Vulkan pipeline cache remains device/driver dependent even when shader
-translation is offline. Do not import D2R shader data or reuse Mac FPS figures.
+BOTW 当前在熵查询之后停于 `GetInfo(AslrRegionAddress)`。下一步使用上述调试与身份设施推进里程碑 1。即使着色器翻译离线完成，Vulkan 管线缓存仍依赖设备和驱动。不能移入 D2R 游戏着色器数据，也不能复用 Mac 帧率作为 Android 结果。
 
-## Building and checks
+## 构建与检查
 
 ```sh
 cmake -S porting -B /private/build-porting -DCMAKE_BUILD_TYPE=Debug
@@ -171,8 +99,4 @@ ctest --test-dir /private/build-porting --output-on-failure
 python3 -m unittest discover -s tests
 ```
 
-Android CMake links the same core into the runtime/probes. The Mac
-`runtime-botw160` target builds/links it; other Mac title targets and iOS do not
-enable the debugger adapter. Build the BOTW APK with `:app:assembleBotwDebug`,
-not `assembleDebug` for both titles. See [VALIDATION.md](VALIDATION.md) for the
-actual tests and limits of this checkpoint.
+Android CMake 将同一核心链接到运行时和探针。Mac 的 `runtime-botw160` 目标也构建并链接该核心；其他 Mac 游戏目标和 iOS 不启用新增调试适配器。BOTW APK 使用 `:app:assembleBotwDebug`，不要通过 `assembleDebug` 同时构建两个游戏。本阶段实际测试与限制见 [验证记录](VALIDATION.md)。

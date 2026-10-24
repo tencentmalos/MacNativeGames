@@ -1,59 +1,27 @@
-# BOTW guest patch ownership
+# BOTW guest patch 的归属与迁移
 
-`catalog.json` owns the BOTW **1.6.0** adaptation inventory. It records executable
-identity, rationale, compatibility/feature/diagnostic category, dependencies,
-conflicts, legacy source evidence and host-specific acceptance requirements.
-It includes title-specific runtime policies and state hooks as well as code
-patches; a host callback is not converted into an instruction patch merely to
-fit the executor.
+`catalog.json` 管理 BOTW **1.6.0** 的适配清单，记录可执行文件身份、修改理由、兼容性/功能/诊断分类、依赖、冲突、现有源码证据和各宿主的验收要求。除代码补丁外，清单还包含逐游戏运行策略和状态钩子；宿主回调不应仅为适配执行器而被改造成指令补丁。
 
-The existing implementation still lives in `games/totk/runtime` for historical
-build reuse. The `GAME_BOTW160` branches are BOTW code, not TOTK patch recipes.
-BOTW 1.9.0, Wii U BOTW and TOTK are outside this profile. Their addresses and
-layouts must not enter a 1.6.0 recipe.
+由于历史构建复用，现有实现仍位于 `games/totk/runtime`。其中 `GAME_BOTW160` 分支属于 BOTW，不是 TOTK 补丁。本配置不覆盖 BOTW 1.9.0、Wii U BOTW 或 TOTK，它们的地址和布局不得进入 1.6.0 补丁。
 
-| Owner | Responsibility |
+| 归属 | 职责 |
 | --- | --- |
-| This game directory | Executable pins, semantic intent, verified selectors/byte guards, dependencies, feature defaults, state callbacks and acceptance evidence |
-| Shared `porting/runtime` | Identity/preflight checks, atomic staging writes, bounded receipts and native-debugger descriptor publication |
-| Host adapters | Memory protection, host thread/context access, platform ABI and device/backend capabilities |
-| Foundation | Existing input/audio and command transport; no BOTW offsets or gameplay policy |
+| 本游戏目录 | 可执行文件固定身份、语义意图、已验证的定位规则/原字节保护、依赖、功能默认值、状态回调及验收证据 |
+| 公共 `porting/runtime` | 身份/预检、暂存区原子写入、有界应用记录、原生调试描述符发布 |
+| 宿主适配器 | 内存保护、宿主线程/上下文访问、平台 ABI、设备/后端能力 |
+| Foundation | 现有输入/音频和命令传输；不承载 BOTW 偏移或玩法策略 |
 
-All entries are currently **migration inventory**, with `shared_recipe: null`.
-Neither loader consumes this catalog as executable patches. Empty shared
-defaults do not turn off the old Mac implementation: Mac behavior remains under
-its existing guarded code and controls. Android has no enabled entry from this
-inventory. The presence of a legacy verifier is evidence of an available test,
-not a claim that the Android recipe passes it.
+当前所有条目均为**迁移清单**，`shared_recipe: null`。两端加载器均未将此清单作为可执行补丁使用。公共默认列表为空不会关闭 Mac 旧实现；Mac 行为仍由原有保护代码和开关管理。Android 尚未启用清单中的条目。列出旧验证器仅表示存在可参考的测试，并不表示 Android 补丁已经通过验证。
 
-For each migration, first recover the exact original bytes and rewrite overlap
-from private, hash-verified inputs. Generate a host-specific recipe with the
-original Build ID/source hash and rewrite hash, then validate its byte guards
-and behavior. Keep base-dependent fixups and state-page ownership explicit.
-The current executor handles only static instruction writes to staging memory;
-relocation-aware fixups and runtime state hooks need separate contracts.
-Mac's relocated live image must not be passed off as the original rewrite.
+逐项迁移时，先从私有且哈希已验证的输入中恢复精确原字节及重写重叠关系。生成包含原始 Build ID/源哈希和重写哈希的宿主专用补丁定义，再验证字节保护与运行行为。依赖基址的修正和状态页所有权必须明确。当前执行器只处理暂存内存中的静态指令写入；重定位相关修正和运行时状态钩子需要独立约定。不能将 Mac 已重定位的实时映像当作原始重写产物。
 
-The title planner must resolve dependencies and conflicts before submitting a
-single transaction. For example, pad repeat depends on the VFR timing page;
-the render-size and native-output paths are alternatives; pad diagnostics can
-share a site with the input patch and must produce one composed, guarded write.
-The executor rejects overlapping writes rather than silently ordering them.
-Preserve private original bytes locally; receipts can record byte digests.
+逐游戏规划器必须在提交单个事务前解决依赖和冲突。例如，按键连发依赖 VFR 计时页；渲染尺寸和原生输出是不同的可选路径；输入诊断与输入补丁可能共用修改点，必须先组合成一次受保护的写入。执行器会拒绝重叠写入，不会静默按顺序覆盖。原始字节留在私有本地，应用记录可保存字节摘要。
 
-Use the native debugger's shared identity/session protocol for observations,
-but keep BOTW hook locations, displaced instructions, object interpretation and
-trap handling in this directory. Full source maps, guest stack reconstruction
-and Android diagnostic-hook migration remain pending. Never ignore all traps
-to make an unverified hook work.
+观测复用原生调试器的公共身份/会话协议，但 BOTW 钩子位置、被替换指令、对象解释和 trap 处理仍归本目录管理。完整来源映射、guest 栈重建和 Android 诊断钩子迁移尚未完成。禁止通过忽略所有 trap 使未验证钩子继续运行。
 
 ```sh
 python3 games/botw/guest_patches/validate_catalog.py
 python3 games/botw/guest_patches/validate_catalog.py --manifest /private/botw160/manifest.json
 ```
 
-The validator checks identity drift, source references and the dependency graph.
-The optional manifest check binds the inventory to original modules from a
-specific host preparation; it does not validate or activate executable recipes.
-See [the shared porting contract](../../../porting/README.md) and
-[validation evidence](../../../porting/VALIDATION.md).
+验证器检查身份漂移、源码引用和依赖图。可选的 manifest 检查将清单绑定到指定宿主准备流程中的原始模块，但不验证或启用可执行补丁。另见[公共移植约定](../../../porting/README.md)和[验证证据](../../../porting/VALIDATION.md)。

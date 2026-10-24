@@ -1,109 +1,58 @@
-# BOTW port foundation validation
+# BOTW 移植底座验证记录
 
-Date: 2026-10-24. Source baseline: `c7fcac6` on the owner's
-`codex/android-zelda` branch, plus this checkpoint. Only BOTW 1.6.0 was advanced.
-The existing TOTK APK was not rebuilt, installed or used for acceptance.
+日期：2026-10-24。源码基线为用户 fork 的 `codex/android-zelda` 分支上 `c7fcac6`，加上本阶段修改。本阶段仅推进 BOTW 1.6.0，未重建、安装或使用现有 TOTK APK 验收。
 
-## Implemented and exercised
+## 已实现与已验证范围
 
-| Check | Result | Boundary |
+| 检查 | 结果 | 边界 |
 | --- | --- | --- |
-| Repository Python/native suite | 341 tests passed in 61.235 s | Includes a freshly compiled common core, catalog identity/dependency failures and resolver negative cases |
-| BOTW catalog | 12 entries; both private host manifests matched the catalog's original-module pins | Inventory only; zero shared executable recipes enabled |
-| Shared core on Odin3 | Passed | Wrong identity, original-byte mismatch, overlap, category opt-in, atomic failure, receipts and debugger ownership/generations |
-| Mac BOTW executable | Built with warnings-as-errors; native probe passed | 4,000 original main PLT/SDK calls on four threads; constructors and game entry not run |
-| Android BOTW native probe | Passed | 4,000 original calls and four SDK waits on four threads, separate guest stacks/TLS |
-| Native metadata/resolver | Four actual loader snapshots passed on Mac/Android | Original SDK Start vendor symbol, exact gate-return mapping and explicit unknown for an interior rewrite address |
-| Mac native debugger | Checkpoint breakpoint and stable all-stop descriptor read passed | Synthetic fixture; no guest stack reconstruction or full-game debugging claimed |
-| BOTW APK build and lint | Passed | `assembleBotwDebug` and `lintBotwDebug` only |
-| Installed APK tests | 3 passed, none skipped | Private module import/execution and failed-import preservation, synthetic controller events and audio callback consumption |
-| APK signature/alignment | Passed | Debug signing and 16 KiB zip alignment; device execution was on 4 KiB pages |
+| 仓库 Python/原生测试集 | 341 项通过，耗时 61.235 s | 包含重新编译的公共核心、清单身份/依赖失败路径及解析器反例 |
+| BOTW 清单 | 12 项；两端私有清单均匹配原始模块固定身份 | 仅为迁移清单，启用的公共可执行补丁为零 |
+| Odin3 公共核心 | 通过 | 错误身份、原字节不匹配、重叠、分类开关、原子失败、应用记录及调试所有权/代次 |
+| Mac BOTW 可执行文件 | 以警告视为错误的配置构建；原生探针通过 | 四线程完成 4,000 次原始 main PLT/SDK 调用；未执行构造函数或游戏入口 |
+| Android BOTW 原生探针 | 通过 | 四线程、独立 guest 栈/TLS，完成 4,000 次原始调用和四次 SDK 等待 |
+| 原生元数据/解析器 | Mac/Android 四份真实加载器快照通过 | 原始 SDK Start 厂商符号、精确跳板返回映射、重写区内部地址明确返回 unknown |
+| Mac 原生调试器 | checkpoint 断点及全停状态下稳定描述符读取通过 | 使用合成测试程序，未验证 guest 栈重建或完整游戏调试 |
+| BOTW APK 构建与 lint | 通过 | 仅运行 `assembleBotwDebug` 和 `lintBotwDebug` |
+| 已安装 APK 测试 | 3 项通过，无跳过 | 私有模块导入/执行、失败导入保留、合成手柄事件、音频回调消费 |
+| APK 签名/对齐 | 通过 | 调试签名和 ZIP 16 KiB 对齐；实际设备页大小为 4 KiB |
 
-Device: AYN Odin3, Android 15, ARM64, 4 KiB host pages. No root, application-data
-clear or uninstall was used. Existing private input data and imported generations
-were preserved. The instrumentation module test completed with status code 0;
-it was not an assumption skip. The audio/input tests do not certify physical
-controller layout or audible game audio.
+设备为 AYN Odin3，Android 15、ARM64、4 KiB 宿主页。没有使用 root、清除应用数据或卸载应用，现有私有输入和导入代次均保留。模块 instrumentation 测试以状态码 0 完成，不是条件不满足导致的跳过。音频/输入测试不能证明实体按键布局或游戏音频听感正确。
 
-The upstream suite emitted subprocess `ResourceWarning` messages. The reported
-children were checked after completion; none remained alive. The suite returned
-success. Foundation's JSON dependency also emits existing Clang literal-operator
-deprecation warnings in Android builds; no dependency source was changed.
+上游测试集输出了子进程 `ResourceWarning`。完成后检查所报告的进程，均已退出，测试集返回成功。Android 构建中 Foundation 的 JSON 依赖仍有既存 Clang 字面量运算符弃用警告，本次未修改依赖源码。
 
-Toolchain: Xcode at `/Applications/Xcode.app`, JDK 17, Android SDK/build-tools 36,
-NDK `29.0.14206865`, CMake `3.22.1`, Gradle `9.8.1`, AGP `9.4.1`. Foundation and
-Oboe remain at the commits pinned by `android/dependencies.json`.
+工具链：`/Applications/Xcode.app` 中的 Xcode、JDK 17、Android SDK/build-tools 36、NDK `29.0.14206865`、CMake `3.22.1`、Gradle `9.8.1`、AGP `9.4.1`。Foundation 和 Oboe 保持 `android/dependencies.json` 固定的提交。
 
-## APK identity
+## APK 身份
 
-Installed package: `org.macnative.android.botw`, version code **3**, version
-**0.3-foundation**. The debug APK contains no game modules, RomFS, keys, saves or
-translated game shaders.
+已安装包：`org.macnative.android.botw`，version code **3**，版本 **0.3-foundation**。调试 APK 不包含游戏模块、RomFS、密钥、存档或已翻译的游戏着色器。
 
-SHA-256:
+SHA-256：
 
 ```text
 3a6eaa0dcc0744336eeb7851e362fecda1982748a82c3f5d59a5130f56c187bd
 ```
 
-Local artifact:
-`/Users/bytedance/workspace/native-switch-study/porting-20261024/artifacts/BOTW-Android-foundation-arm64-debug.apk`.
+本地产物：`/Users/bytedance/workspace/native-switch-study/porting-20261024/artifacts/BOTW-Android-foundation-arm64-debug.apk`。
 
-## Native debugger evidence
+## 原生调试器证据
 
-The existing native-debugger MCP was used with a bounded synthetic fixture and
-the exported `mng_port_debug_checkpoint` function breakpoint. The successful
-session was `d03b0d7e4a3b4576bdc7d319ebc7b01d`, stop epoch **2**, with all threads
-stopped. ABI 1, descriptor size 40, even sequence 6, generation 1 and the 37-byte
-payload were read as descriptor -> memory -> descriptor, with identical descriptor
-values. The payload identified the fixture's checkpoint. No target helper was
-called. The process resumed and exited with code 0, and the session was cleaned.
+通过现有 native-debugger MCP 使用有界合成测试程序，在导出的 `mng_port_debug_checkpoint` 上设置函数断点。成功会话为 `d03b0d7e4a3b4576bdc7d319ebc7b01d`，stop epoch **2**，全部线程停止。按“描述符 → 内存 → 描述符”读取，ABI 为 1、描述符大小 40、偶数序号 6、代次 1、数据长度 37 字节，两次描述符完全一致。数据标识了测试程序的 checkpoint，全程未调用目标辅助函数。恢复后进程以代码 0 退出，会话已清理。
 
-Fixture Mach-O UUID: `53A62419-29A1-3772-9227-CFE10CA49724`. The full debugger
-target token, journal and read-memory evidence remain in the private capture.
-These identify that fixture session, not the game executable.
+测试程序 Mach-O UUID：`53A62419-29A1-3772-9227-CFE10CA49724`。完整 target token、会话日志和内存读取证据保留在私有采集中。这些身份只对应该次测试会话，不代表游戏可执行文件。
 
-The default Xcode 16.3 `lldb-dap` failed its initial attach. Selecting
-`/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` worked. A second,
-short fixture run exited before breakpoint installation; a bounded attach window
-in the test fixture enabled the successful read above. All three owned sessions
-were cleaned, including the failed attach. The production runtime has no such
-wait. No debugger-owned game process was force-terminated.
+默认 Xcode 16.3 的 `lldb-dap` 首次附加失败；改用 `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap` 后成功。第二次短测试在安装断点前退出，因此在测试程序中加入有界附加窗口，完成上述读取。三次自建会话均已清理，包括附加失败的会话。正式运行时没有该等待，也没有强制终止调试器持有的游戏进程。
 
-The actual Mac BOTW loader separately published the common schema and passed its
-native-call probe. The Android loader emitted `modules_sealed`, `sdk_startup`
-and `startup_blocked` snapshots; each bound to its exact private manifest and
-resolved the original four-argument SDK Start export. Android LLDB attach,
-native-debugger provider integration, complete rewrite source maps, mixed
-guest/host unwinding and thread wait graphs remain unimplemented/unverified.
+真实 Mac BOTW 加载器另外发布了公共格式元数据，并通过原生调用探针。Android 加载器输出 `modules_sealed`、`sdk_startup`、`startup_blocked` 快照；每份快照均绑定精确私有清单，并解析到原始四参数 SDK Start 导出。Android LLDB 附加、native-debugger provider 集成、完整重写来源映射、guest/宿主混合栈回溯和线程等待图尚未实现或验证。
 
-## Current runtime boundary
+## 当前运行边界
 
-The Android standalone startup probe still returns **blocked**, exit code 3,
-at `GetInfo` information ID 12 (ASLR region address), after two successful
-process-entropy queries. Constructors, `nnMain`, NVN Vulkan frames and gameplay
-have not run. This APK is a runtime preview, not a playable BOTW port. There is
-no Android gameplay FPS or shader-performance comparison from this checkpoint.
+Android 独立启动探针在完成两次进程熵查询后，仍停于 `GetInfo` 信息 ID 12（ASLR 区域地址），报告 **blocked** 并以代码 3 退出。构造函数、`nnMain`、NVN Vulkan 帧和游戏逻辑均未运行。该 APK 是运行时预览版，尚不能游玩 BOTW。本阶段没有 Android 实际游戏帧率或着色器性能对比结果。
 
-The Mac probe preserved existing patch behavior and checked the existing guards.
-It observed 18,249 exclusive-load upgrades in text and 63 in rewritten code.
-Those counts describe this exact Mac input only. Android's rewrite must be
-enumerated and validated independently, including concurrency behavior.
+Mac 探针保留并检查了现有补丁行为，观测到正文中 18,249 处、重写区中 63 处独占读升级。这些数量只对应精确 Mac 输入；Android 重写必须独立枚举并验证，包括并发行为。
 
-The BOTW-owned catalog records compatibility, timing/input, graphics and
-diagnostic adaptations. It intentionally does not claim that the legacy Mac
-post-relocation code has been migrated into `apply_staged`. Static recipes,
-base-dependent fixups and state callbacks need separate proof before enabling
-them. Mac per-patch receipts remain explicitly unavailable in the debug snapshot.
+BOTW 清单记录兼容性、时序/输入、图形和诊断适配。Mac 现有的重定位后补丁尚未迁入 `apply_staged`。静态补丁、依赖基址的修正和状态回调都需分别证明后才能启用。Mac 调试快照仍明确标记逐补丁应用记录不可用。
 
-No full iOS build was performed. The new Mac debugger adapter is excluded from
-iOS. Full Mac game/application packaging and live gameplay were not acceptance
-steps; the rebuilt target was the BOTW native loader executable.
+本次未进行完整 iOS 构建，新增 Mac 调试适配器在 iOS 上排除。完整 Mac 游戏/应用打包和实际游戏运行也不是本阶段验收项；重新构建的是 BOTW 原生加载器可执行文件。
 
-Private evidence is retained outside Git at
-`/Users/bytedance/workspace/native-switch-study/porting-20261024`, including
-`upstream-tests-final.log`, `porting-android-test-final.txt`,
-`botw-apk-tests-final.txt`, `botw-mac-snapshots-final.log`,
-`botw-android-startup-snapshots-final.log`, `native-symbol-validation-final.json`,
-`botw-apk-artifact.json` and the three debugger session exports. Game inputs and
-generated manifests are not repository artifacts.
+私有证据保留在 Git 之外的 `/Users/bytedance/workspace/native-switch-study/porting-20261024`，包括 `upstream-tests-final.log`、`porting-android-test-final.txt`、`botw-apk-tests-final.txt`、`botw-mac-snapshots-final.log`、`botw-android-startup-snapshots-final.log`、`native-symbol-validation-final.json`、`botw-apk-artifact.json` 及三份调试会话导出。游戏输入和生成清单不属于仓库产物。
