@@ -43,6 +43,8 @@ is copied into this repository.
 - `android/third_party/d2r/sha256.c`, `sha256.h` and the syntax conversion in
   `android/tools/asm_elf.py`: adapted from D2R Mobile at the same `758f5d4`
   revision, MIT. The SHA-256 subset retains its license beside the source.
+  The shared `porting` core also uses that subset; its C symbols are prefixed
+  `mng_port_` to avoid colliding with Apple's CommonCrypto in the Mac loader.
 
 The Android study builds are local development artifacts, not a binary release.
 Their source dependencies and applicable notices must accompany any distribution.

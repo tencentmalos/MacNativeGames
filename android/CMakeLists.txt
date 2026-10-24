@@ -22,6 +22,7 @@ foreach(dependency foundation oboe)
 endforeach()
 # Standalone modules: do not import Foundation's renderer or emulator services.
 if(ANDROID)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../porting ${CMAKE_BINARY_DIR}/porting)
     add_subdirectory(${OBOE_SOURCE_DIR} ${CMAKE_BINARY_DIR}/oboe EXCLUDE_FROM_ALL)
 endif()
 add_subdirectory(${FOUNDATION_SOURCE_DIR}/modules/audio ${CMAKE_BINARY_DIR}/foundation-audio)
@@ -43,8 +44,8 @@ if(ANDROID)
         "static const char* mng_expected_botw=R\"mng(${expected_botw})mng\";\nstatic const char* mng_expected_totk=R\"mng(${expected_totk})mng\";\nstatic const char* mng_expected_android=R\"mng(${expected_android})mng\";\n")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/../games/totk/android/expected-modules.json")
-    add_library(mng_guest_runtime STATIC native/guest_runtime.cpp native/guest_call.S
-        third_party/d2r/sha256.c "${android_gate}")
+    add_library(mng_guest_runtime STATIC native/guest_runtime.cpp native/guest_call.S "${android_gate}")
+    target_link_libraries(mng_guest_runtime PUBLIC mng_porting)
     target_include_directories(mng_guest_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
         "${FOUNDATION_SOURCE_DIR}/third_party/nlohmann_json/include")
     add_executable(mng_runtime_probe native/guest_probe_main.cpp)
@@ -53,7 +54,8 @@ if(ANDROID)
     # A separate process may enter SDK startup and stop at the first unsupported
     # service. Its process-exit diagnostics must never be exposed through JNI.
     add_executable(mng_startup_probe native/guest_startup_main.cpp native/guest_runtime.cpp
-        native/guest_call.S native/guest_startup_call.S third_party/d2r/sha256.c "${android_gate}")
+        native/guest_call.S native/guest_startup_call.S "${android_gate}")
+    target_link_libraries(mng_startup_probe PRIVATE mng_porting)
     target_compile_definitions(mng_startup_probe PRIVATE MNG_STARTUP_PROBE=1)
     target_include_directories(mng_startup_probe PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
         "${FOUNDATION_SOURCE_DIR}/third_party/nlohmann_json/include")

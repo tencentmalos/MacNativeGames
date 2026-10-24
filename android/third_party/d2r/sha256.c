@@ -30,11 +30,11 @@ static void sha256_block(uint32_t *h, const uint8_t *p) {
     }
     h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
 }
-int CC_SHA256_Init(CC_SHA256_CTX *c) {
+int mng_port_sha256_Init(mng_port_sha256_CTX *c) {
     static const uint32_t iv[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     memcpy(c->h, iv, sizeof iv); c->n = 0; c->used = 0; return 1;
 }
-int CC_SHA256_Update(CC_SHA256_CTX *c, const void *data, CC_LONG len) {
+int mng_port_sha256_Update(mng_port_sha256_CTX *c, const void *data, mng_port_sha_size len) {
     const uint8_t *p = data; c->n += len;
     while (len) {
         uint32_t k = 64 - c->used; if (k > len) k = len;
@@ -43,7 +43,7 @@ int CC_SHA256_Update(CC_SHA256_CTX *c, const void *data, CC_LONG len) {
     }
     return 1;
 }
-int CC_SHA256_Final(unsigned char *md, CC_SHA256_CTX *c) {
+int mng_port_sha256_Final(unsigned char *md, mng_port_sha256_CTX *c) {
     uint64_t bits = c->n * 8;
     c->buf[c->used++] = 0x80;
     if (c->used > 56) { memset(c->buf + c->used, 0, 64 - c->used); sha256_block(c->h, c->buf); c->used = 0; }
@@ -53,4 +53,4 @@ int CC_SHA256_Final(unsigned char *md, CC_SHA256_CTX *c) {
     for (int i = 0; i < 8; i++) put_be32(md + 4 * i, c->h[i]);
     return 1;
 }
-unsigned char *CC_SHA256(const void *data, CC_LONG len, unsigned char *md) { CC_SHA256_CTX c; CC_SHA256_Init(&c); CC_SHA256_Update(&c, data, len); CC_SHA256_Final(md, &c); return md; }
+unsigned char *mng_port_sha256(const void *data, mng_port_sha_size len, unsigned char *md) { mng_port_sha256_CTX c; mng_port_sha256_Init(&c); mng_port_sha256_Update(&c, data, len); mng_port_sha256_Final(md, &c); return md; }

@@ -31,6 +31,12 @@ if version == 'v143':
     assert report['module_file_sha256']['extracted/v143/exefs/main'] == 'e84a90d551fed0824b4b74933b9c6d043c458521363a7cea58b2faca1822dc9e', 'Unsupported 1.4.3 main image'
 modules = []
 for name in ['main', 'subsdk0', 'sdk']:
+    source_path = ROOT / f'extracted/{version}/exefs/{name}'
+    source = source_path.read_bytes()
+    source_sha256 = hashlib.sha256(source).hexdigest()
+    assert source_sha256 == report['module_file_sha256'][str(source_path.relative_to(ROOT))], 'Original NSO identity changed'
+    assert source[:4] == b'NSO0' and len(source) >= 256, 'Invalid original NSO'
+    build_id = source[0x40:0x60].hex()
     path = ROOT / f'rewritten/{version}/{name}.patched.bin'
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
@@ -94,7 +100,7 @@ for name in ['main', 'subsdk0', 'sdk']:
     imm = (imm ^ (1 << 20)) - (1 << 20)
     ctor_flag = ((tags[12]+16) & ~4095) + (imm << 12) + ((w >> 10) & 0xfff)*4
     assert layout['DATA_OFF'] <= ctor_flag < layout['KEY_PAGE_OFF']
-    modules.append(dict(name=name, sha256=digest, size=len(image), ctor_flag=ctor_flag, layout=layout, tags=tags,
+    modules.append(dict(name=name, build_id=build_id, source_sha256=source_sha256, sha256=digest, size=len(image), ctor_flag=ctor_flag, layout=layout, tags=tags,
                         symbols=symbols, relocs=relocs, gates=gates))
 
 # Find main's ORIGINAL PLT stub addressing the relocated GetSystemTick slot.
@@ -129,9 +135,21 @@ for n, m in enumerate(modules):
 lines.append('static Module modules[] = {')
 for n, m in enumerate(modules):
     l = m['layout']
-    lines.append('{' + f'.name={json.dumps(m["name"])},.digest={json.dumps(m["sha256"])},.file_size={m["size"]}ULL,.text_end={l["TEXT_END"]}ULL,.ro_off={l["RO_OFF"]}ULL,.data_off={l["DATA_OFF"]}ULL,.patch_off={l["PATCH_OFF"]}ULL,.key_off={l["KEY_PAGE_OFF"]}ULL,.symbols=symbol_{n},.nsym={len(m["symbols"])},.relocs=reloc_{n},.nreloc={len(m["relocs"])},.gates=gate_{n},.ngate={len(m["gates"])},.init={m["tags"].get(12,0)}ULL,.ctor_flag={m["ctor_flag"]}ULL,.init_array={m["tags"].get(25,0)}ULL,.init_size={m["tags"].get(27,0)}ULL' + '},')
+    lines.append('{' + f'.name={json.dumps(m["name"])},.build_id={json.dumps(m["build_id"])},.source_sha256={json.dumps(m["source_sha256"])},.digest={json.dumps(m["sha256"])},.file_size={m["size"]}ULL,.text_end={l["TEXT_END"]}ULL,.ro_off={l["RO_OFF"]}ULL,.data_off={l["DATA_OFF"]}ULL,.patch_off={l["PATCH_OFF"]}ULL,.key_off={l["KEY_PAGE_OFF"]}ULL,.symbols=symbol_{n},.nsym={len(m["symbols"])},.relocs=reloc_{n},.nreloc={len(m["relocs"])},.gates=gate_{n},.ngate={len(m["gates"])},.init={m["tags"].get(12,0)}ULL,.ctor_flag={m["ctor_flag"]}ULL,.init_array={m["tags"].get(25,0)}ULL,.init_size={m["tags"].get(27,0)}ULL' + '},')
 lines.append('};')
 lines.append(f'#define PROBE_PLT {main["probe_plt"]}ULL\n#define PROBE_SLOT {slot}ULL')
+if version == 'botw160':
+    # Debug metadata only: no original/replacement instruction bytes. Keep the
+    # manifest beside the private generated tables, never in a game package UI.
+    debug_modules = []
+    for m in modules:
+        debug_modules.append(dict(name=m['name'], build_id=m['build_id'], source_sha256=m['source_sha256'],
+            sha256=m['sha256'], file_size=m['size'], layout=m['layout'],
+            symbols=[[s['name'], s['value'], s['size'], int(s['defined']), s['binding'], s['type']] for s in m['symbols']],
+            gates=[[g['ret'], int(g['timer']), g['arg'], g['original']] for g in m['gates']]))
+    debug_manifest = (json.dumps(dict(schema_version=1, target='macos', title='botw160', modules=debug_modules), separators=(',', ':'))+'\n').encode()
+    (OUT / 'port-debug-manifest.json').write_bytes(debug_manifest)
+    lines.append(f'#define PORT_DEBUG_MANIFEST_SHA256 "{hashlib.sha256(debug_manifest).hexdigest()}"')
 (OUT / 'runtime_tables.h').write_text('\n'.join(lines) + '\n')
 # Details are evidence, not additional source code.
 (ROOT / ('analysis/runtime-layout.json' if version == 'v0' else f'analysis/{version}-port/runtime-layout.json')).write_text(json.dumps(modules, indent=2) + '\n')

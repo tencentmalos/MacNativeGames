@@ -1,5 +1,8 @@
 # Android runtime checkpoint: 2026-10-24
 
+This records the earlier dual-preview checkpoint. Development now targets BOTW
+only; see [the porting foundation checkpoint](../porting/VALIDATION.md).
+
 The BOTW and TOTK APKs now import prepared modules and execute original ARM64 SDK
 functions inside the Android application. **Neither starts a game or renders a
 game frame.** No gameplay, visual correctness or frame-rate result is claimed.

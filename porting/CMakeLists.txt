@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.22)
+project(mng_porting LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+add_library(mng_porting STATIC runtime/port_runtime.cpp
+    ../android/third_party/d2r/sha256.c)
+set_target_properties(mng_porting PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(mng_porting PUBLIC runtime)
+add_executable(mng_porting_probe tests/port_runtime_test.cpp)
+target_link_libraries(mng_porting_probe PRIVATE mng_porting)
+enable_testing()
+add_test(NAME mng_porting_probe COMMAND mng_porting_probe)

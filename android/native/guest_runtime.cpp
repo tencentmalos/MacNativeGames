@@ -2,8 +2,8 @@
 // Android module loading and relocation follow games/totk/runtime/loader.c.
 // Bionic key discovery follows D2R Mobile 758f5d4, validated per process/thread.
 #include "guest_runtime.h"
-#include "../third_party/d2r/sha256.h"
 #include "expected_modules.h"
+#include "port_runtime.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -151,15 +151,13 @@ struct File {
     }
 };
 std::string sha256(const void* data,size_t bytes) {
-    unsigned char digest[32]; require(bytes<=UINT32_MAX,"Digest input too large");
-    CC_SHA256(data,CC_LONG(bytes),digest); char text[65];
-    for(unsigned i=0;i<32;++i)snprintf(text+i*2,3,"%02x",digest[i]); return text;
+    return mng::port::sha256({static_cast<const uint8_t*>(data),bytes});
 }
 struct Symbol { std::string name; uint64_t value,size; unsigned defined,binding,type; };
 struct Reloc { uint64_t where; unsigned kind,symbol; int64_t addend; };
 struct Gate { uint64_t ret; unsigned timer,arg; uint64_t original; };
 struct Module {
-    std::string name,build_id; size_t file_size{},text{},ro{},data{},key{},patch{};
+    std::string name,build_id,source_sha256,image_sha256; size_t file_size{},text{},ro{},data{},key{},patch{};
     std::unique_ptr<Mapping> mapping; std::vector<Symbol> symbols; std::vector<Reloc> relocs;
     std::vector<Gate> gates; uint64_t relative{},symbolic{},cross{},weak{};
     uintptr_t address(uint64_t offset) const { require(offset<key,"Symbol outside module: "+name); return uintptr_t(mapping->base)+offset; }
@@ -180,6 +178,18 @@ struct Session {
     std::atomic<uint64_t> calls{};
     std::atomic<uint64_t> sleeps{};
     std::mutex error_mutex; std::string worker_error;
+    // Clear debugger bindings before module mappings and TLS keys are destroyed.
+    mng::port::DebugSession debug;
+    void publish_debug(const char* phase, Json detail=Json::object()) {
+        if(!debug.generation())return;
+        Json payload={{"schema_version",1},{"kind","mng-native-port"},{"profile",title},
+            {"platform","android-arm64"},{"process_id",getpid()},{"generation",debug.generation()},
+            {"phase",phase},{"manifest_sha256",manifest_hash},{"modules",Json::array()},{"detail",std::move(detail)}};
+        for(const auto& m:modules)payload["modules"].push_back({{"name",m.name},{"build_id",m.build_id},
+            {"source_sha256",m.source_sha256},{"image_sha256",m.image_sha256},{"base",uintptr_t(m.mapping->base)},
+            {"size",m.mapping->size},{"text_size",m.text},{"patch_offset",m.patch}});
+        debug.publish(payload.dump());
+    }
 #ifdef MNG_STARTUP_PROBE
     std::string startup_symbol;
     std::array<uint64_t,4> startup_entropy{};
@@ -205,6 +215,7 @@ struct Session {
                 result["stop"]=std::move(location);
             }
         }
+        publish_debug("startup_blocked",result);
         const auto text=result.dump()+"\n";
         size_t done=0;while(done<text.size()) {const auto n=write(STDOUT_FILENO,text.data()+done,text.size()-done);if(n<0&&errno==EINTR)continue;if(n<=0)break;done+=size_t(n);}
         // This path exists only in the standalone executable. The OS reclaims
@@ -221,6 +232,10 @@ struct Session {
         keys.set(0,nullptr);keys.set(1,environment.base);keys.set(2,environment.base+8192);
         keys.set(3,reinterpret_cast<void*>(runtime_gate));keys.set(8,reinterpret_cast<void*>(context.host_end-64));
         for(size_t i=0;i<keys.keys.size();++i)keys.check(i);
+        publish_debug("sdk_startup",{{"host_thread_id",gettid()},{"guest_stack_low",uintptr_t(guest.base)+page_size()},
+            {"guest_stack_high",uintptr_t(guest.base)+guest.size-page_size()},{"guest_tls",uintptr_t(environment.base)},
+            {"guest_tlr",uintptr_t(environment.base)+8192},{"guest_x18_slot",tsd_base()+keys.offsets[0]},
+            {"platform_x18",platform_x18()},{"entry_vendor_symbol",startup_symbol}});
         // Reserve a main-thread identity for the future thread service table.
         // No unsupported thread query is acknowledged by this probe.
         const uint64_t callback=reinterpret_cast<uintptr_t>(startup_callback);
@@ -230,7 +245,8 @@ struct Session {
     }
 #endif
 
-    Session(const std::string& directory,const std::string& title):title(title) {
+    Session(const std::string& directory,const std::string& title):title(title),
+        debug(title=="botw160" && getenv("MNG_PORT_DEBUG") && std::string(getenv("MNG_PORT_DEBUG"))=="1") {
         require(title=="botw160" || title=="totk100","Unsupported title profile");
         const auto expected=Json::parse(title=="botw160"?mng_expected_botw:mng_expected_totk).at("exefs_sha256");
         File manifest(directory+"/manifest.json",64u<<20); std::string text(manifest.size,'\0'); manifest.read_all(text.data());
@@ -245,6 +261,7 @@ struct Session {
             const auto& j=doc.at("modules").at(index); Module m; m.name=j.at("name");
             require(m.name==names[index] && j.at("source_sha256")==expected.at(m.name),"Unsupported NSO identity");
             m.build_id=j.at("build_id");require(m.build_id.size()==64,"Invalid module Build ID");
+            m.source_sha256=j.at("source_sha256");m.image_sha256=j.at("sha256");
             const auto& l=j.at("layout"); require(l.at("TARGET_ANDROID")==1,"Apple module rejected");
             m.text=l.at("TEXT_END");m.ro=l.at("RO_OFF");m.data=l.at("DATA_OFF");m.key=l.at("KEY_PAGE_OFF");m.patch=l.at("PATCH_OFF");
             m.file_size=j.at("file_size");
@@ -308,6 +325,7 @@ struct Session {
         require((words[0]&0x9f00001f)==0x90000010 && (words[1]&0xffc003ff)==0xf9400211 && words[3]==0xd61f0220 && int64_t(plt&~4095ull)+imm*4096+((words[1]>>10)&0xfff)*8==int64_t(slot),"Original PLT pattern mismatch");
         runtime_hle_tsd_off=keys.offsets[8];
         for(auto& m:modules) seal(m);
+        publish_debug("modules_sealed");
     }
     void seal(Module& m) {
         const auto text_end=up(m.text),ro_end=m.data&~(page_size()-1);

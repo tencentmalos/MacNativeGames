@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "kind": "guest-patch-inventory",
+  "profile": "botw160",
+  "title_id": "01007EF00011E000",
+  "display_version": "1.6.0",
+  "source_manifest": "games/botw/assets/expected-v1.6.0.json",
+  "identity_evidence": "NSO header Build IDs from the private original modules after verification against source_manifest; confirmed by both loader manifests.",
+  "modules": {
+    "main": {
+      "build_id": "8e9978d50bdd20b4c8395a106c27ffde",
+      "source_sha256": "15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b"
+    },
+    "subsdk0": {
+      "build_id": "93ff8252d975adf07230cb86c83301c53f2804df",
+      "source_sha256": "d22d98656a19be240b554e7db8d69126d6427232521238d665aec3509087f2cf"
+    },
+    "sdk": {
+      "build_id": "fcf93a41b08c5193a1410d262602dc621617c56f",
+      "source_sha256": "754cf4b581d749fbe3d457cf66497b141ef994cf592d247919d64a37dcc30d27"
+    }
+  },
+  "scope": "Inventory and migration requirements only; not executable patch recipes or replacement defaults for the legacy Mac loader.",
+  "shared_defaults": {
+    "macos-arm64": [],
+    "android-arm64": []
+  },
+  "patches": [
+    {
+      "id": "botw160.exclusive-acquire",
+      "category": "compatibility",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Strengthen matched exclusive load/store windows used by BOTW synchronization.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "excl_acquire"
+        ],
+        "controls": [
+          "TOTK_EXCL_ACQUIRE"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        },
+        {
+          "kind": "available_verifier_not_android_acceptance",
+          "path": "games/botw/scripts/excl_windows.py"
+        },
+        {
+          "kind": "available_verifier_not_android_acceptance",
+          "path": "games/botw/scripts/excl_scan.py"
+        }
+      ],
+      "migration_acceptance": [
+        "Enumerate exact original and Android rewrite windows; preserve surrounding control flow and register proof.",
+        "Validate weak-memory concurrency and job-queue progress on Android; do not infer necessity from Mac counts."
+      ]
+    },
+    {
+      "id": "botw160.realtime-vfr",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Drive VFR, fade and UI animation timing from elapsed frame time while retaining six physics substeps.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "patch_realtime"
+        ],
+        "controls": [
+          "TOTK_REALTIME"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        },
+        {
+          "kind": "available_verifier_not_android_acceptance",
+          "path": "games/botw/scripts/verify_realtime_patch.py"
+        }
+      ],
+      "migration_acceptance": [
+        "Prove original guards against the pinned NSO and Android rewrite; split static instructions from base-dependent page fixups.",
+        "Own the per-title timing page and present callback; test simulation speed, fade, menus and physics across frame intervals."
+      ]
+    },
+    {
+      "id": "botw160.pad-repeat",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Keep held-button counts and pause-menu repeat timing at the intended game-time cadence.",
+      "dependencies": [
+        "botw160.realtime-vfr"
+      ],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "patch_pad_repeat"
+        ],
+        "controls": [
+          "TOTK_PAD_REPEAT"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        },
+        {
+          "kind": "available_verifier_not_android_acceptance",
+          "path": "games/botw/scripts/verify_pad_repeat_patch.py"
+        }
+      ],
+      "migration_acceptance": [
+        "Bind to the same BOTW timing-page lifecycle as realtime-vfr.",
+        "Test hold, release, short taps and repeat cadence with Foundation controller events at different frame intervals."
+      ]
+    },
+    {
+      "id": "botw160.render-1080",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Change the docked internal scene dimensions.",
+      "dependencies": [],
+      "conflicts": [
+        "botw160.native-output"
+      ],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "patch_render_1080"
+        ],
+        "controls": [
+          "TOTK_RENDER_RES"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Verify the selected display-mode branch, resource extents and rendered output on Vulkan."
+      ]
+    },
+    {
+      "id": "botw160.native-output",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Coordinate title canvas, scene dimensions and output-mode changes.",
+      "dependencies": [],
+      "conflicts": [
+        "botw160.render-1080"
+      ],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "patch_output_res",
+          "botw_output_tick",
+          "runtime_output_mode_cycle"
+        ],
+        "controls": [
+          "TOTK_OUTPUT_RES",
+          "TOTK_RENDER_RES"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Separate BOTW state/fixups from MetalFX host operations; define Android capability checks.",
+        "Verify render target ownership, heap sizes, resize and mode changes without stale guest state."
+      ]
+    },
+    {
+      "id": "botw160.aspect",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Adjust BOTW camera and UI behavior for the selected aspect ratio.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "botw_aspect_install",
+          "botw_aspect_apply",
+          "botw_aspect_writer"
+        ],
+        "controls": [
+          "TOTK_ASPECT"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Validate instruction guards, state lifetime, UI layout, camera framing and transition behavior."
+      ]
+    },
+    {
+      "id": "botw160.handheld-render",
+      "category": "feature",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "The existing Apple mobile path changes handheld scene size independently of the output canvas.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "patch_phone_render"
+        ],
+        "controls": []
+      },
+      "status": {
+        "macos-arm64": "apple_mobile_reference",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Choose Android handheld policy explicitly; validate the exact branch and Vulkan targets.",
+        "Do not infer an Android default from the iOS export policy."
+      ]
+    },
+    {
+      "id": "botw160.job-queue-observer",
+      "category": "diagnostic",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Observe duplicate jobs and worker synchronization transitions through guarded trap sites.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "runtime_game_patches",
+          "botw_jq_hook"
+        ],
+        "controls": [
+          "TOTK_JQ_CHECK"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Prove every hook, displaced instruction and register interpretation for this Build ID.",
+        "Adapt trap context and ownership to Android/native debugger; reject unrelated traps and bound output."
+      ]
+    },
+    {
+      "id": "botw160.pad-observer",
+      "category": "diagnostic",
+      "module": "main",
+      "effect": "guest_instructions",
+      "reason": "Observe controller hold/repeat state at the timing-sensitive update site.",
+      "dependencies": [
+        "botw160.realtime-vfr"
+      ],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "pad_log_arm",
+          "botw_pad_hook"
+        ],
+        "controls": [
+          "TOTK_PAD_LOG"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Compose with pad-repeat before staging so an intentional shared site has one final guarded write.",
+        "Adapt Darwin context access and validate displaced instruction semantics; bound event capture."
+      ]
+    },
+    {
+      "id": "botw160.frame-step-pin",
+      "category": "diagnostic",
+      "module": "main",
+      "effect": "guest_state",
+      "reason": "Temporarily control the BOTW timing-page value for deterministic diagnostics.",
+      "dependencies": [
+        "botw160.realtime-vfr"
+      ],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "runtime_frame_step_pin"
+        ],
+        "controls": [
+          "framestep command"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Route through the runtime owner and reset the override at session teardown."
+      ]
+    },
+    {
+      "id": "botw160.movie-pacing",
+      "category": "feature",
+      "module": "main",
+      "effect": "host_policy",
+      "reason": "Use BOTW movie state to select title-specific frame pacing.",
+      "dependencies": [
+        "botw160.realtime-vfr"
+      ],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/game_patches_botw.c",
+        "functions": [
+          "runtime_game_fps_limit"
+        ],
+        "controls": [
+          "TOTK_MOVIE_30"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/game_patches_botw.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Prove movie-state lifetime and Vulkan present integration; check audio/video synchronization."
+      ]
+    },
+    {
+      "id": "botw160.world-survey",
+      "category": "diagnostic",
+      "module": "main",
+      "effect": "guest_state",
+      "reason": "Inspect or change BOTW player state using title-specific object chains.",
+      "dependencies": [],
+      "conflicts": [],
+      "legacy_implementation": {
+        "path": "games/totk/runtime/world_survey.c",
+        "functions": [
+          "runtime_survey_init",
+          "runtime_survey_command"
+        ],
+        "controls": [
+          "TOTK_SURVEY",
+          "TOTK_SLOT_OWNER",
+          "TOTK_PROFILE_DIR"
+        ]
+      },
+      "status": {
+        "macos-arm64": "legacy",
+        "android-arm64": "pending_validation"
+      },
+      "shared_recipe": null,
+      "evidence": [
+        {
+          "kind": "source_inspection",
+          "path": "games/totk/runtime/world_survey.c"
+        }
+      ],
+      "migration_acceptance": [
+        "Independently prove object-chain identity and lifetime for the exact NSO.",
+        "Establish a safe runtime-owned mutation point before Android writes; the legacy BOTW command-thread writes are not acceptance."
+      ]
+    }
+  ]
+}

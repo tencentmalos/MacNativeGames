@@ -23,6 +23,8 @@ android {
     productFlavors {
         botw {
             dimension 'title'; applicationIdSuffix '.botw'
+            versionCode 3
+            versionName '0.3-foundation'
             resValue 'string','app_name','BOTW Android Preview'
             resValue 'string','title_profile','botw160'
             resValue 'string','game_version','BOTW 1.6.0'

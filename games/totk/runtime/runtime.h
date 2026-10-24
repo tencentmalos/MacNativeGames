@@ -11,6 +11,7 @@ typedef struct {
  const Symbol *symbols; unsigned nsym; const Reloc *relocs; unsigned nreloc;
  const Gate *gates; unsigned ngate; unsigned *hash, hash_mask;
  uint8_t *base; unsigned relative, symbolic, cross, weak;
+ const char *build_id, *source_sha256;   /* original NSO identity, never a host ELF/Mach-O ID */
 } Module;
 extern pthread_key_t runtime_keys[8];
 _Noreturn void runtime_fail(const char *message);

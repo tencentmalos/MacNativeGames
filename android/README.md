@@ -7,6 +7,12 @@ The read-only Citron reference checkout is unchanged.
 
 Measured results and remaining game-runtime work: [VALIDATION.md](VALIDATION.md).
 
+Current focus: **BOTW 1.6.0 only**, version `0.3-foundation`. The existing TOTK
+preview remains at `0.2-runtime`; do not use dual-flavor builds as the development
+loop. The shared Mac/Android porting design, patch policy and debugger contract
+are in [porting/README.md](../porting/README.md), with current evidence in
+[porting/VALIDATION.md](../porting/VALIDATION.md).
+
 ## Current boundary
 
 The two APK flavors are **native runtime previews**, not playable game ports.
@@ -63,7 +69,7 @@ are consumed directly; Foundation is not copied or modified.
 
 ```sh
 cd android
-./gradlew :app:assembleDebug :app:lintBotwDebug :app:lintTotkDebug \
+./gradlew :app:assembleBotwDebug :app:lintBotwDebug \
   -PfoundationDir=/absolute/path/to/foundation \
   -PoboeDir=/absolute/path/to/oboe
 ```

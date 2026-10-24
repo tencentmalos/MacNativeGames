@@ -26,6 +26,26 @@ pthread_key_t runtime_keys[8];
 static uint64_t timer_calls, svc_calls;
 _Noreturn void runtime_fail(const char *message) { fprintf(stderr,"[totk] FAIL: %s\n",message); exit(1); }
 static void need(bool c,const char *m) { if(!c) runtime_fail(m); }
+#if defined(GAME_BOTW160) && !TARGET_OS_IPHONE
+#include "../../../porting/runtime/port_debug.h"
+static uint64_t port_debug_generation;
+static void port_debug_close(void) {mng_port_debug_close(port_debug_generation);}
+static void port_debug_publish(void) {
+ const char *enabled=getenv("MNG_PORT_DEBUG");if(!enabled||strcmp(enabled,"1"))return;
+ port_debug_generation=mng_port_debug_open();need(port_debug_generation!=0,"port debugger owner");
+ need(atexit(port_debug_close)==0,"port debugger cleanup");
+ char payload[8192];size_t at=0;
+ int n=snprintf(payload,sizeof payload,"{\"schema_version\":1,\"kind\":\"mng-native-port\",\"profile\":\"botw160\",\"platform\":\"macos-arm64\",\"process_id\":%d,\"generation\":%llu,\"phase\":\"modules_sealed\",\"manifest_sha256\":\"%s\",\"detail\":{\"live_patch_receipts\":\"unavailable_legacy_mac_policy\"},\"modules\":[",getpid(),(unsigned long long)port_debug_generation,PORT_DEBUG_MANIFEST_SHA256);
+ need(n>0&&(size_t)n<sizeof payload,"port debug header");at=(size_t)n;
+ for(unsigned i=0;i<NM;i++) {
+  Module *m=&modules[i];need(m->build_id&&m->source_sha256,"regenerate BOTW runtime identity tables");
+  n=snprintf(payload+at,sizeof payload-at,"%s{\"name\":\"%s\",\"build_id\":\"%s\",\"source_sha256\":\"%s\",\"image_sha256\":\"%s\",\"base\":%llu,\"size\":%zu,\"text_size\":%llu,\"patch_offset\":%llu}",i?",":"",m->name,m->build_id,m->source_sha256,m->digest,(unsigned long long)(uintptr_t)m->base,m->size,(unsigned long long)m->text_end,(unsigned long long)m->patch_off);
+  need(n>0&&(size_t)n<sizeof payload-at,"port debug module");at+=(size_t)n;
+ }
+ need(at+3<sizeof payload,"port debug end");memcpy(payload+at,"]}",3);at+=2;
+ need(mng_port_debug_publish(port_debug_generation,payload,at),"publish port debugger metadata");
+}
+#endif
 static size_t page_up(size_t x) { return (x+0x3fff)&~(size_t)0x3fff; }
 static unsigned hash_name(const char *s) { unsigned h=2166136261u; for(;*s;s++)h=(h^(uint8_t)*s)*16777619u;return h; }
 static void make_hash(Module *m) {
@@ -554,5 +574,8 @@ int main(int argc,char **argv) {
 #endif
  verify_identity(!strcmp(argv[2],"probe-identity-negative"));
  for(unsigned i=0;i<NM;i++){seal(&modules[i]);check_permissions(&modules[i]);}
+#if defined(GAME_BOTW160) && !TARGET_OS_IPHONE
+ port_debug_publish();
+#endif
  if(!strcmp(argv[2],"probe-gpu-writeback")||!strcmp(argv[2],"probe-gpu-sampler-border")||!strcmp(argv[2],"probe-gpu-pool-retire")||!strcmp(argv[2],"probe-gpu-tex-slots")||!strcmp(argv[2],"probe-gpu-arg-epoch")||!strcmp(argv[2],"probe-gpu-anomaly")||!strcmp(argv[2],"probe-gpu-vertex-streams")||!strcmp(argv[2],"probe-gpu-layer-merge")||!strcmp(argv[2],"probe-gpu-cube-merge")||!strcmp(argv[2],"probe-gpu-texture-retire")||!strcmp(argv[2],"probe-gpu-texels-region")||!strcmp(argv[2],"probe-gpu-linear-rt")||!strcmp(argv[2],"probe-gpu-storage-view")||!strcmp(argv[2],"probe-gpu-compressed-alias")||!strcmp(argv[2],"probe-gpu-upload-batch")||!strcmp(argv[2],"probe-gpu-ds-clear")||!strcmp(argv[2],"probe-gpu-ub-rename")||!strcmp(argv[2],"probe-gpu-ubo-snapshot")||!strcmp(argv[2],"probe-gpu-drv-c0")||!strcmp(argv[2],"probe-gpu-dispatch-chain")||!strcmp(argv[2],"probe-gpu-copy-alias")||!strcmp(argv[2],"probe-gpu-srgb-view")||!strcmp(argv[2],"probe-gpu-depth-output"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-memory"))runtime_memory_probe();else if(!strcmp(argv[2],"probe-gfx"))runtime_gfx_probe(0);else if(!strcmp(argv[2],"probe-vpool"))runtime_vpool_probe();else if(!strcmp(argv[2],"probe-gpu-widen")||!strcmp(argv[2],"probe-gpu-blockrt")||!strcmp(argv[2],"probe-gpu-midclear")||!strcmp(argv[2],"probe-gpu-winding")||!strcmp(argv[2],"probe-gpu-tile"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-audio"))runtime_audio_probe();else if(!strcmp(argv[2],"probe-gfx-negative"))runtime_gfx_probe(1);else if(!strcmp(argv[2],"probe"))probe();else if(!strcmp(argv[2],"probe-fs"))runtime_fs_probe();else if(!strcmp(argv[2],"probe-swkbd"))runtime_swkbd_probe();else if(!strcmp(argv[2],"probe-save"))runtime_save_probe();else if(!strcmp(argv[2],"boot")){if(getenv("TOTK_VERIFY_STARTUP")||getenv("TOTK_HEADLESS"))boot();else runtime_front_run(boot);}else runtime_fail("unknown mode");return 0;
 }
