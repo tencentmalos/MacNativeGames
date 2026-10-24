@@ -27,3 +27,12 @@ games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
 ultracode.md
+# Android local dependencies and build products
+android/.gradle/
+android/.kotlin/
+android/.cxx/
+android/app/.cxx/
+android/app/build/
+android/build/
+android/local.properties
+*.apk

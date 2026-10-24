@@ -1,0 +1,11 @@
+{
+  "foundation": {
+    "repository": "git@github.com:tencentmalos/foundation.git",
+    "commit": "2f27d3bb41c1659d33b89905255fab2675fc0144",
+    "modules": ["modules/audio", "modules/input"]
+  },
+  "oboe": {
+    "repository": "git@github.com:tencentmalos/oboe.git",
+    "commit": "987538b6ec4cb9e699b117a890e686de7a9302fa"
+  }
+}

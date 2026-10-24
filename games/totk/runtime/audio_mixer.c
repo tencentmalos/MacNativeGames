@@ -1,4 +1,6 @@
+#ifndef __ANDROID__
 #include <TargetConditionals.h>
+#endif
 /* Audio renderer mixing stage and the IAudioDevice service.
    Per 5 ms frame (called by audio_renderer.c with the renderer lock held, before voices advance):
    voices are decoded (PCM8/16/32, float, Nintendo DSP-ADPCM) and resampled to the output rate with linear
@@ -13,7 +15,11 @@
 #include "audio_mixer.h"
 #include "audio_reverb.h"
 #include "audio_effects.h"
+#ifdef __ANDROID__
+#include "../../../android/native/platform.h"
+#else
 #include <AudioToolbox/AudioToolbox.h>
+#endif
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -36,7 +42,12 @@ typedef struct Mixer {
     float *buf; int nbuf, frame;
     int *offset;                                   /* first mix buffer of each mix id */
     SplitInfo *split; int nsplit; SplitDest *dest; int ndest;
-    AudioComponentInstance unit; int unit_ok, rate;
+    #ifdef __ANDROID__
+    void *unit;
+#else
+    AudioComponentInstance unit;
+#endif
+    int unit_ok, rate;
     float ring[RING_FRAMES * 2]; _Atomic uint64_t wr, rd, underruns, overruns;
     _Atomic int playing; int ready; _Atomic uint64_t missing_frames, trims, trimmed_frames;
     _Atomic uint64_t flush_until; _Atomic unsigned stop_epoch; unsigned callback_epoch;
@@ -106,21 +117,20 @@ static int prefill_blocks(void) {   // read once before the device starts (audio
     }
     return blocks;
 }
-static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *io) {
-    (void)flags; (void)ts; (void)bus;
-    Mixer *m = ctx; float *out = io->mBuffers[0].mData;
+static void pull_samples(void *ctx,float *out,unsigned frames) {
+    Mixer *m=ctx;
     atomic_fetch_add(&m->callback_frames,frames);
     unsigned epoch=atomic_load_explicit(&m->stop_epoch,memory_order_acquire);
     uint64_t rd = atomic_load(&m->rd), wr = atomic_load_explicit(&m->wr, memory_order_acquire), have = wr - rd;
     if(epoch!=m->callback_epoch){uint64_t until=atomic_load_explicit(&m->flush_until,memory_order_acquire);if(until>rd){rd=until<wr?until:wr;atomic_store_explicit(&m->rd,rd,memory_order_release);}have=wr-rd;m->callback_epoch=epoch;m->ready=0;}
     if(!atomic_load_explicit(&m->playing,memory_order_acquire)){
-        memset(out,0,(size_t)frames*2*sizeof(float));m->ready=0;atomic_store_explicit(&m->rd,wr,memory_order_release);return noErr;
+        memset(out,0,(size_t)frames*2*sizeof(float));m->ready=0;atomic_store_explicit(&m->rd,wr,memory_order_release);return;
     }
     uint64_t prefill=(uint64_t)m->frame*(uint64_t)prefill_blocks();if(prefill<frames)prefill=frames;if(prefill>RING_FRAMES)prefill=RING_FRAMES;
     if(!m->ready){
         /* prefill_blocks() 5-ms blocks (default four, 20 ms) of scheduling headroom for the producer.
            A real underrun still counts and requires a fresh prefill. */
-        if(have<prefill){memset(out,0,(size_t)frames*2*sizeof(float));return noErr;}
+        if(have<prefill){memset(out,0,(size_t)frames*2*sizeof(float));return;}
         m->ready=1;
     }
     /* After a device stall (Bluetooth, CoreAudio) the producer, paced by the wall clock, keeps the backlog it built up:
@@ -131,15 +141,25 @@ static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTi
         rd = wr - prefill;
         have = prefill;
     }
-    UInt32 n = frames < have ? frames : (UInt32)have;
+    unsigned n = frames < have ? frames : (unsigned)have;
     uint64_t nonzero=0;
-    for (UInt32 i = 0; i < n; i++) { uint64_t k = (rd + i) % RING_FRAMES; out[2 * i] = m->ring[2 * k]; out[2 * i + 1] = m->ring[2 * k + 1];if(out[2*i]!=0 || out[2*i+1]!=0)nonzero++; }
+    for (unsigned i = 0; i < n; i++) { uint64_t k = (rd + i) % RING_FRAMES; out[2 * i] = m->ring[2 * k]; out[2 * i + 1] = m->ring[2 * k + 1];if(out[2*i]!=0 || out[2*i+1]!=0)nonzero++; }
     atomic_fetch_add(&m->callback_nonzero,nonzero);
     if (n < frames) { memset(out + 2 * n, 0, (frames - n) * 2 * sizeof(float));atomic_fetch_add(&m->underruns,1);atomic_fetch_add(&m->missing_frames,frames-n);m->ready=0; }
     atomic_store_explicit(&m->rd, rd + n, memory_order_release);
-    return noErr;
+    return;
 }
+#ifndef __ANDROID__
+static OSStatus pull(void *ctx,AudioUnitRenderActionFlags *flags,const AudioTimeStamp *ts,UInt32 bus,UInt32 frames,AudioBufferList *io) {
+    (void)flags;(void)ts;(void)bus;
+    pull_samples(ctx,io->mBuffers[0].mData,frames);return noErr;
+}
+#endif
 static void output_open(Mixer *m, int rate) {
+#ifdef __ANDROID__
+    if(getenv("TOTK_AUDIO_OFF")) return;
+    m->unit=mng_audio_open(rate,pull_samples,m);m->unit_ok=m->unit!=NULL;
+#else
     if (getenv("TOTK_AUDIO_OFF")) { fprintf(stderr, "[totk-audio] TOTK_AUDIO_OFF: mixing without a CoreAudio device\n"); return; }
 #if TARGET_OS_IPHONE
     AudioComponentDescription d = {kAudioUnitType_Output, kAudioUnitSubType_RemoteIO, kAudioUnitManufacturer_Apple, 0, 0};   /* session set up by the app */
@@ -156,6 +176,7 @@ static void output_open(Mixer *m, int rate) {
         fprintf(stderr, "[totk-audio] 【红】CoreAudio output setup failed: mixing without sound\n"); AudioComponentInstanceDispose(m->unit); return;
     }
     m->unit_ok = 1; fprintf(stderr, "[totk-audio] CoreAudio output %d Hz stereo\n", rate);
+#endif
 }
 /* iOS (from nxnative b301431): the system stops the RemoteIO unit when another app takes the audio session (a call,
    Siri, an alarm) and invalidates it when media services are reset. Nothing started it again, so the game stayed
@@ -167,10 +188,14 @@ void runtime_audio_output_restart(int recreate) {
     pthread_mutex_lock(&g_out_mu);
     for (int i = 0; i < 4; i++) {
         Mixer *m = g_out[i]; if (!m) continue;
+#ifdef __ANDROID__
+        (void)recreate;mng_audio_reopen(m->unit);
+#else
         if (m->unit_ok && !recreate && !AudioOutputUnitStart(m->unit)) { fprintf(stderr, "[totk-audio] output started again\n"); continue; }
         if (m->unit_ok) { m->unit_ok = 0; AudioOutputUnitStop(m->unit); AudioUnitUninitialize(m->unit); AudioComponentInstanceDispose(m->unit); }
         m->ready = 0; output_open(m, m->rate);
         fprintf(stderr, "[totk-audio] output rebuilt (%s): %s\n", recreate ? "media services reset" : "start failed", m->unit_ok ? "playing" : "no sound");
+#endif
     }
     pthread_mutex_unlock(&g_out_mu);
 }
@@ -228,7 +253,11 @@ void audio_mixer_close(AudioRenderer *r) {
     Mixer *m = r->mixer; if (!m) return;
     pthread_mutex_lock(&g_out_mu);
     for (int i = 0; i < 4; i++) if (g_out[i] == m) g_out[i] = NULL;
+#ifdef __ANDROID__
+    mng_audio_close(m->unit);m->unit=NULL;m->unit_ok=0;
+#else
     if (m->unit_ok) { m->unit_ok = 0; AudioOutputUnitStop(m->unit); AudioUnitUninitialize(m->unit); AudioComponentInstanceDispose(m->unit); }
+#endif
     pthread_mutex_unlock(&g_out_mu);
     if(m->capture_worker){
         pthread_mutex_lock(&m->capture_lock);m->capture_closing=1;pthread_cond_signal(&m->capture_cond);pthread_mutex_unlock(&m->capture_lock);

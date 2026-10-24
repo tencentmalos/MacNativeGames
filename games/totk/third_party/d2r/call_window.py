@@ -1,8 +1,9 @@
 """BLR x18 preparation without changing callee entry registers or return PC.
 
 The preceding, movable stack access is replayed first. A borrowed register is
-saved/restored in the Apple red zone, then x30 receives virtual x18. Returning
-to BLR x30 at the ORIGINAL call address preserves its architectural link value.
+saved/restored in the Apple red zone or an allocated Android stack frame, then
+x30 receives virtual x18. Returning to BLR x30 at the ORIGINAL call address
+preserves its architectural link value.
 Precondition: no alternate entry into the second word of this two-word window.
 """
 import struct
@@ -35,25 +36,29 @@ def movable_store(word, address):
 
 
 def prepare_call(prefix_word, prefix_address, call_address, patch_address,
-                 key_page_address, key_index, scratch=0):
+                 key_page_address, key_index, scratch=0, target='apple'):
+    if target not in ('apple', 'android'):
+        raise ValueError('Unknown target ABI')
+    android = target == 'android'
     if call_address != prefix_address + 4 or not 0 <= scratch < 18:
         raise ValueError('Invalid call window or scratch register')
     movable_store(prefix_word, prefix_address)
     if not 0 <= key_index < 8:
         raise ValueError('Invalid key-page index')
-    adrp_pc = patch_address + 12
+    adrp_pc = patch_address + (16 if android else 12)
     pages = ((key_page_address & ~4095) - (adrp_pc & ~4095)) >> 12
     if not -(1 << 20) <= pages < (1 << 20):
         raise ValueError('Key page out of ADRP range')
     words = [
         prefix_word,
-        0xF8000000 | ((-16 & 0x1FF) << 12) | (31 << 5) | scratch,
-        0xD53BD060 | 30,  # mrs x30,tpidrro_el0
+        (0xF8000C00 if android else 0xF8000000) | ((-16 & 0x1FF) << 12) | (31 << 5) | scratch,
+        (0xD53BD040 if android else 0xD53BD060) | 30,
+        *([0xF85F83DE] if android else []),  # ldur x30,[x30,#-8]: Bionic TLS
         0x90000000 | ((pages & 3) << 29) | (((pages >> 2) & 0x7FFFF) << 5) | scratch,
         0xF9400000 | (((key_page_address & 4095) // 8 + key_index) << 10) | (scratch << 5) | scratch,
         0x8B000000 | (scratch << 16) | (30 << 5) | 30,
         0xF9400000 | (30 << 5) | 30,
-        0xF8400000 | ((-16 & 0x1FF) << 12) | (31 << 5) | scratch,
-        branch(patch_address + 32, call_address),
+        ((0xF8400400 | (16 << 12)) if android else (0xF8400000 | ((-16 & 0x1FF) << 12))) | (31 << 5) | scratch,
+        branch(patch_address + (36 if android else 32), call_address),
     ]
     return struct.pack('<' + 'I' * len(words), *words)

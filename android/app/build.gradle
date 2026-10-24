@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' }
+def foundation = providers.gradleProperty('foundationDir').get()
+def oboe = providers.gradleProperty('oboeDir').get()
+android {
+    namespace 'org.macnative.android'
+    compileSdk 36
+    buildFeatures { resValues true }
+    ndkVersion '29.0.14206865'
+    defaultConfig {
+        applicationId 'org.macnative.android'
+        minSdk 31
+        targetSdk 36
+        versionCode 1
+        versionName '0.1-platform'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild { cmake {
+            arguments "-DFOUNDATION_SOURCE_DIR=${foundation}", "-DOBOE_SOURCE_DIR=${oboe}"
+            targets 'macnative_platform'
+        } }
+    }
+    flavorDimensions 'title'
+    productFlavors {
+        botw { dimension 'title'; applicationIdSuffix '.botw'; resValue 'string','app_name','BOTW Android Platform Test' }
+        totk { dimension 'title'; applicationIdSuffix '.totk'; resValue 'string','app_name','TOTK Android Platform Test' }
+    }
+    externalNativeBuild { cmake { path '../CMakeLists.txt'; version '3.22.1' } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+android.sourceSets.main.kotlin.srcDir("${foundation}/modules/input/android/src/main/kotlin")
+
+dependencies {
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "junit:junit:4.13.2"
+}

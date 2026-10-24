@@ -40,6 +40,7 @@ for name in ['main', 'subsdk0', 'sdk']:
     for line in (ROOT / f'rewritten/{version}/{name}.fixups.tsv').read_text().splitlines():
         _, key, value = line.split()
         layout[key] = int(value, 0)
+    assert not layout.get('TARGET_ANDROID', 0), 'Android images require the Bionic runtime loader'
     mod0 = struct.unpack_from('<I', image, 4)[0]
     assert image[mod0:mod0 + 4] == b'MOD0'
     dyn = mod0 + struct.unpack_from('<i', image, mod0 + 4)[0]

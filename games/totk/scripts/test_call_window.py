@@ -30,7 +30,7 @@ def put(image, address, *words):
     image[address:address + 4 * len(words)] = struct.pack('<' + 'I' * len(words), *words)
 
 
-def image(patched, recursive, mutation=None, prefix_word=STORE):
+def image(patched, recursive, mutation=None, prefix_word=STORE, abi="apple"):
     blob = bytearray(0x4000)
     put(blob, OUTER, prefix_word, BLR_X18, 0xD503201F)
     if recursive:
@@ -46,7 +46,7 @@ def image(patched, recursive, mutation=None, prefix_word=STORE):
         windows = [(OUTER, PATCH)]
     if patched:
         for prefix, patch in windows:
-            code = prepare_call(prefix_word, prefix, prefix + 4, patch, KEYPAGE, 0)
+            code = prepare_call(prefix_word, prefix, prefix + 4, patch, KEYPAGE, 0, target=abi)
             blob[patch:patch + len(code)] = code
             put(blob, prefix, branch(prefix, patch), BLR_X30)
         if mutation == 'wrong_call_register': put(blob, OUTER + 4, 0xD63F0200)
@@ -56,7 +56,7 @@ def image(patched, recursive, mutation=None, prefix_word=STORE):
     return blob
 
 
-def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_word=STORE):
+def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_word=STORE, abi="apple", signal=False):
     rng = random.Random(seed)
     registers = [rng.getrandbits(64) for _ in range(31)]
     registers[18] = BASE + CALLEE if target is None else target
@@ -67,7 +67,7 @@ def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_w
     slot = rng.randrange(32, 480)
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(BASE, 0x4000)
-    u.mem_write(BASE, bytes(image(patched, recursive, mutation, prefix_word)))
+    u.mem_write(BASE, bytes(image(patched, recursive, mutation, prefix_word, abi)))
     u.mem_map(STACK, 0x20000)
     u.mem_write(STACK, rng.randbytes(0x20000))
     u.mem_map(TSD, 0x10000)
@@ -76,6 +76,8 @@ def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_w
     for reg, value in zip(GP, registers): u.reg_write(reg, value)
     for reg, value in zip(VECTORS, vectors): u.reg_write(reg, value)
     u.reg_write(UC_ARM64_REG_TPIDRRO_EL0, TSD)
+    u.reg_write(UC_ARM64_REG_TPIDR_EL0, TSD + 0x8008)
+    u.mem_write(TSD + 0x8000, struct.pack('<Q', TSD))
     u.reg_write(UC_ARM64_REG_SP, SP)
     u.reg_write(UC_ARM64_REG_NZCV, rng.randrange(16) << 28)
     if patched: u.reg_write(GP[18], 0xBAD0BAD0BAD0BAD0)
@@ -88,6 +90,8 @@ def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_w
                 [u.reg_read(r) for r in VECTORS])
 
     def hook(uc, address, size, _):
+        if signal:
+            uc.mem_write(uc.reg_read(UC_ARM64_REG_SP) - 128, bytes(128))
         if address == BASE + CALLEE: entries.append(state())
         if address == BASE + OUTER + 8: uc.emu_stop()
 
@@ -114,6 +118,23 @@ def execute(seed, patched, recursive=False, mutation=None, target=None, prefix_w
 
 
 class CallWindowTest(unittest.TestCase):
+    def test_android_call_preserves_stack_and_link(self):
+        for recursive in (False, True):
+            for seed in range(128):
+                for prefix in ((STORE,) if recursive else (STORE, 0xf85e83a0, 0xb81f83af)):
+                    with self.subTest(seed=seed, recursive=recursive, prefix=hex(prefix)):
+                        self.assertEqual(execute(seed, False, recursive, prefix_word=prefix, abi="android"),
+                                         execute(seed, True, recursive, prefix_word=prefix, abi="android"))
+
+    def test_android_signal_frame_cannot_clobber_live_scratch(self):
+        for seed in range(64):
+            original = execute(seed, False, abi="android")
+            patched = execute(seed, True, abi="android", signal=True)
+            for field in ("state", "entries", "pc", "error"):
+                self.assertEqual(original[field], patched[field])
+        # The same stress detects an Apple-red-zone emitter used on Android.
+        self.assertNotEqual(execute(0, False)["entries"], execute(0, True, signal=True)["entries"])
+
     def test_v143_frame_pointer_load_and_store(self):
         for prefix_word in (0xf85e83a0, 0xb81f83af):
             for seed in range(64):

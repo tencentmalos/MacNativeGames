@@ -328,13 +328,99 @@ def sp_delta(ins):
     assert not re.match(r'(sp|wsp),', ins.op_str), f'writes sp: {ins.address:x} {ins.op_str}'
     return 0
 
+# Android ABI emitters adapted from jhaizhou-ops/d2r-mobile 758f5d4 (MIT).
+# The loader must measure the Bionic pthread-key offset; it is not a guest offset.
+TARGET = os.environ.get('DM_TARGET', 'apple')
+if TARGET not in ('apple', 'android'):
+    raise ValueError(f'Unsupported rewrite target: {TARGET}')
+NOREDZONE = TARGET == 'android'
+def MRS_TPIDR(t): return 0xD53BD040 | t
+def emit_tp(t):
+    if NOREDZONE: emit(MRS_TPIDR(t)); emit(LDUR(t, t, -8))
+    else: emit(MRS_TPIDRRO(t))
+def STR_PRE(t, n, off): return 0xF8000C00 | ((off & 0x1FF) << 12) | (n << 5) | t
+def LDR_POST(t, n, off): return 0xF8400400 | ((off & 0x1FF) << 12) | (n << 5) | t
+def stash(S, T): emit(STP_PRE(S, T, 31, -16) if NOREDZONE else STP(S, T, 31, -16))
+def unstash(S, T): emit(LDP_POST(S, T, 31, 16) if NOREDZONE else LDP(S, T, 31, -16))
+def uses_sp(ins): return re.search(r'\bw?sp\b', ins.op_str) is not None
+SPOP = r'\[sp(?:, #-?(?:0x)?[0-9a-f]+)?\](?:!|, #-?(?:0x)?[0-9a-f]+)?|sp(?:, #(?:0x)?[0-9a-f]+(?:, lsl #12)?)?$'
+def sp_frame(ins, w, dlt):
+    if not uses_sp(ins): return 16, [w]
+    F, rn = 16, (w >> 5) & 31
+    # Checked by disassembly: the same mnemonic (mov xd, sp becomes add), operands identical apart from the sp one, and the new offset is off.
+    def same(nw, off):
+        d, o = dis(nw, ins.address), dis(w, ins.address)
+        if d.mnemonic != o.mnemonic and (o.mnemonic, d.mnemonic) != ('mov', 'add'): return False
+        return re.sub(SPOP, 'SP', d.op_str) == re.sub(SPOP, 'SP', o.op_str) and (f'#{off:#x}]' in d.op_str or d.op_str.endswith(f'sp, #{off:#x}'))
+    if (w >> 27) & 7 == 0b101 and not (w >> 26) & 1 and rn == 31:
+        opc, mode, L = w >> 30, (w >> 23) & 7, (w >> 22) & 1
+        if opc == 3 or (opc == 1 and not L): return None
+        sc = 8 if opc == 2 else 4
+        imm = (((w >> 15) & 0x7F) ^ 0x40) - 0x40
+        if mode == 2:
+            a = imm * sc
+            if a < 0: return None
+        elif mode in (1, 3):
+            a = dlt if mode == 3 else 0
+            while a < 16 - F: F += 16
+        else: return None
+        off = a + F
+        if off % sc or (F + dlt) % 8 or not -512 <= F + dlt <= 504: return None
+        if mode == 2 and off // sc > 63:
+            # Offset + 16 is out of the pair's range (252 for 32-bit pairs, 504 for 64-bit ones): split it into two unsigned-offset
+            # single-register ldr / str (ldpsw -> ldrsw).
+            o = dis(w, ins.address); regs = o.op_str.split(', [')[0].split(', ')
+            size, opc = (3 if opc == 2 else 2), ((2 if opc == 1 else 1) if L else 0)
+            out = []
+            for k, rt in enumerate((w & 31, (w >> 10) & 31)):
+                nw = 0x39000000 | (size << 30) | (opc << 22) | (((off + k * sc) // sc) << 10) | (31 << 5) | rt
+                d = dis(nw, ins.address)
+                if not d.mnemonic.startswith(('ldr', 'str')) or d.op_str != f'{regs[k]}, [sp, #{off + k * sc:#x}]': return None
+                out.append(nw)
+            return F, out
+        if not -64 <= off // sc <= 63: return None
+        nw = (w & ~(0x7F << 15) & ~(7 << 23)) | (((off // sc) & 0x7F) << 15) | (2 << 23)
+        return (F, [nw]) if same(nw, off) else None
+    if dlt: return None
+    if (w >> 27) & 7 == 0b111 and not (w >> 26) & 1 and rn == 31:
+        size, sc = w >> 30, 1 << (w >> 30)
+        if (w >> 24) & 3 == 1:
+            if size == 3 and (w >> 22) & 3 == 2: return None
+            off = ((w >> 10) & 0xFFF) * sc + F
+            if off // sc > 0xFFF: return None
+            nw = (w & ~(0xFFF << 10)) | ((off // sc) << 10)
+            return (F, [nw]) if same(nw, off) else None
+        if (w >> 24) & 3 == 0 and not (w >> 21) & 1 and (w >> 10) & 3 == 0:
+            off = ((((w >> 12) & 0x1FF) ^ 0x100) - 0x100) + F
+            if not F <= off <= 255: return None
+            nw = (w & ~(0x1FF << 12)) | ((off & 0x1FF) << 12)
+            return (F, [nw]) if same(nw, off) else None
+        return None
+    if w & 0xFF800000 == 0x91000000 and rn == 31 and (w & 31) != 31:
+        if (w >> 22) & 1: return F, [w, ADDI(w & 31, w & 31, F)]
+        off = ((w >> 10) & 0xFFF) + F
+        if off > 0xFFF: return None
+        nw = (w & ~(0xFFF << 10)) | (off << 10)
+        return (F, [nw]) if same(nw, off) else None
+    return None
+
 def site_plain(ins):
     S, T = pick(regs_in(ins))
     dlt = sp_delta(ins)
+    fr = sp_frame(ins, subst(ins, S), dlt) if NOREDZONE else None
+    if fr:
+        F, words = fr
+        start = here()
+        emit(STP_PRE(S, T, 31, -F)); emit_tp(T); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+        for x in words: emit(x)
+        emit(STRX(S, T))
+        emit(LDP_POST(S, T, 31, F + dlt)); emit(B(here(), ins.address + 4))
+        return start
+    if NOREDZONE: raise ValueError(f'Android stack access cannot be rewritten safely: {ins.address:#x}')
     save = -16 if dlt == 0 else -112          # 改 sp 的指令会写到 sp 下方，暂存放到保留区深处 | Instructions that modify sp write below sp, so the scratch save is placed deep in the reserved area
     assert dlt == 0 or dlt >= -96, f'sp delta {dlt} at {ins.address:x}'
     start = here()
-    emit(STP(S, T, 31, save)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    emit(STP(S, T, 31, save)); emit_tp(T); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
     emit(subst(ins, S))
     emit(STRX(S, T))                 # 一律写回：capstone 会漏报写入（adds w18 实例） | Always write back: capstone can miss reporting a write (the adds w18 instance)
     emit(LDP(S, T, 31, save - dlt)); emit(B(here(), ins.address + 4))
@@ -345,34 +431,35 @@ def site_cond(ins):
     S, T = pick(regs_in(ins))
     tgt = ins.operands[-1].imm
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    stash(S, T); emit_tp(T); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
     m = ins.mnemonic
     taken = here() + 4 * 3
     off = (taken - here()) >> 2
     nw = ((w & 0xFF000000) | ((off & 0x7FFFF) << 5) | S) if m in ('cbz', 'cbnz') else ((w & 0xFFF80000) | ((off & 0x3FFF) << 5) | S)
     pc = here(); emit(nw)
     dd = dis(nw, pc); assert dd.mnemonic == m and dd.operands[-1].imm == taken
-    emit(LDP(S, T, 31, -16)); emit(B(here(), ins.address + 4))
+    unstash(S, T); emit(B(here(), ins.address + 4))
     assert here() == taken
-    emit(LDP(S, T, 31, -16)); emit(B(here(), tgt))
+    unstash(S, T); emit(B(here(), tgt))
     return start
 
 def site_pcrel(ins):
     tgt = ins.operands[1].imm
     S, T = pick(set())
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18')   # S 先作键页偏移暂存，下一条再装目标值 | S first serves as a temporary for the key page offset; the next instruction then loads the target value
+    stash(S, T); emit_tp(T); emit_slot_addr(T, S, 'K18')   # S 先作键页偏移暂存，下一条再装目标值 | S first serves as a temporary for the key page offset; the next instruction then loads the target value
     pc = here(); emit(ADRP(S, pc, tgt))
     if ins.mnemonic == 'adr': emit(ADDI(S, S, tgt & 0xFFF))
     emit(STRX(S, T))
-    emit(LDP(S, T, 31, -16)); emit(B(here(), ins.address + 4))
+    unstash(S, T); emit(B(here(), ins.address + 4))
     return start
 
 def site_br(ins, base, count):
     """跳转表 br x18：目标 = base + 4i。x16 暂存红区 → 等距落地垫 → 恢复 x16 → 原目标。 | Jump table br x18: target = base + 4i. Stash x16 in the red zone → equally spaced landing pads → restore x16 → original target."""
     start = here()
-    emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))   # x16 / x17 是函数内可存活的临时寄存器，借用前存红区 | x16 / x17 are temporary registers that can stay live within a function; save them to the red zone before borrowing
-    emit(MRS_TPIDRRO(16)); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16)); emit(LDUR(17, 31, -24))
+    if NOREDZONE: emit(STP_PRE(16, 17, 31, -16))
+    else: emit(STUR(16, 31, -16)); emit(STUR(17, 31, -24))   # x16 / x17 是函数内可存活的临时寄存器，借用前存红区 | x16 / x17 are temporary registers that can stay live within a function; save them to the red zone before borrowing
+    emit_tp(16); emit_slot_addr(16, 17, 'K18'); emit(LDRX(16, 16)); emit(LDRX(17, 31, 1) if NOREDZONE else LDUR(17, 31, -24))
     padbase = start + 4 * 24
     delta = padbase - base
     op = ADDI if delta >= 0 else SUBI; dl = abs(delta)
@@ -386,7 +473,7 @@ def site_br(ins, base, count):
     tails = padbase + 4 * count
     for i in range(count): emit(B(here(), tails + 8 * i))
     for i in range(count):
-        emit(0xF85F0000 | (31 << 5) | 16)      # ldur x16,[sp,#-16]
+        emit(LDR_POST(16, 31, 16) if NOREDZONE else 0xF85F0000 | (31 << 5) | 16)      # ldr x16,[sp],#16 | ldur x16,[sp,#-16]
         emit(B(here(), base + 4 * i))
     return start
 
@@ -395,7 +482,7 @@ def site_sysreg_read(ins, kind):
     N = ins.bytes[0] & 31
     tmp = 16 if N != 16 else 17
     start = here()
-    emit(STUR(tmp, 31, -16)); emit(MRS_TPIDRRO(N)); emit_slot_addr(N, tmp, kind); emit(LDRX(N, N)); emit(LDUR(tmp, 31, -16))   # tmp 存红区借用 | tmp is saved by borrowing the red zone
+    emit(STR_PRE(tmp, 31, -16) if NOREDZONE else STUR(tmp, 31, -16)); emit_tp(N); emit_slot_addr(N, tmp, kind); emit(LDRX(N, N)); emit(LDR_POST(tmp, 31, 16) if NOREDZONE else LDUR(tmp, 31, -16))   # tmp 存红区借用 | tmp is saved by borrowing the red zone
     emit(B(here(), ins.address + 4))
     return start
 
@@ -403,9 +490,13 @@ def site_tpidr_write(ins):
     N = struct.unpack('<I', ins.bytes)[0] & 31
     (T,) = pick({N}, 1)
     start = here()
-    emit(0xF81F0000 | (31 << 5) | T)           # stur xT,[sp,#-16]
     tmp = next(x for x in (16, 17) if x not in (N, T))
-    emit(STUR(tmp, 31, -24)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T)); emit(LDUR(tmp, 31, -24))
+    if NOREDZONE:
+        emit(STP_PRE(T, tmp, 31, -16)); emit_tp(T); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T)); emit(LDP_POST(T, tmp, 31, 16))
+        emit(B(here(), ins.address + 4))
+        return start
+    emit(0xF81F0000 | (31 << 5) | T)           # stur xT,[sp,#-16]
+    emit(STUR(tmp, 31, -24)); emit_tp(T); emit_slot_addr(T, tmp, 'KTLS'); emit(STRX(N, T)); emit(LDUR(tmp, 31, -24))
     emit(0xF85F0000 | (31 << 5) | T)           # ldur xT,[sp,#-16]
     emit(B(here(), ins.address + 4))
     return start
@@ -419,7 +510,7 @@ def emit_gate_call():
         Fetching the slot through the key page needs a second register to be borrowed; x29 is borrowed and then immediately restored from the stack: the x29 saved by _dm_gate must be the guest's original value --
         the host identifies the caller by [x29+8] (skill binding observation gate 6, private aiming gate svc86), and the crash backtrace also walks the x29 chain
         (since r24 plan C it was borrowed and not returned, the x29 the host got was the slot offset from the key page, and skill icons fell back to placeholder text)."""
-    emit(MRS_TPIDRRO(30)); emit_slot_addr(30, 29, 'KGATE'); emit(LDRX(30, 30)); emit(LDRX(29, 31))
+    emit_tp(30); emit_slot_addr(30, 29, 'KGATE'); emit(LDRX(30, 30)); emit(LDRX(29, 31))
 
 def site_gate(ins, kind, arg):
     """svc / mrs cntpct_el0 → 宿主门。门地址取自线程槽 KGATE；门按返回点（本块 ldp 的地址）查 gates.tsv。 | svc / mrs cntpct_el0 → host gate. The gate address is taken from thread slot KGATE; the gate looks up gates.tsv by return point (the address of this block's ldp)."""
@@ -502,6 +593,8 @@ def linked_windows(insl, windows):
     return list(groups.values()), edges
 
 def site_window_group(segments):
+    if NOREDZONE and any(uses_sp(x) for seg in segments for x in seg):
+        raise ValueError('Android exclusive group cannot use SP')
     used = set()
     for seg in segments:
         for ins in seg: used |= regs_in(ins)
@@ -509,7 +602,7 @@ def site_window_group(segments):
     entries = {}; entry_branches = []
     for seg in segments:
         entries[seg[0].address] = here()
-        emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+        stash(S, T); emit_tp(T); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
         entry_branches.append((len(patch), seg[0].address)); emit(NOP)
     copied = {}; cursor = here()
     for seg in segments:
@@ -545,16 +638,18 @@ def site_window_group(segments):
         emit(B(here(), copied.get(seg[-1].address + 4, exit_addresses[seg[-1].address + 4])))
     for target in exits:
         assert here() == exit_addresses[target]
-        emit(STRX(S, T)); emit(LDP(S, T, 31, -16)); emit(B(here(), target)); emit(NOP)
+        emit(STRX(S, T)); unstash(S, T); emit(B(here(), target)); emit(NOP)
     return entries
 
 def site_window(seg):
+    if NOREDZONE and any(uses_sp(x) for x in seg):
+        raise ValueError('Android exclusive window cannot use SP')
     used = set()
     for x in seg: used |= regs_in(x)
     S, T = pick(used)
     lo, hi = seg[0].address, seg[-1].address + 4
     start = here()
-    emit(STP(S, T, 31, -16)); emit(MRS_TPIDRRO(T)); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
+    stash(S, T); emit_tp(T); emit_slot_addr(T, S, 'K18'); emit(LDRX(S, T))
     copy0 = here(); n = len(seg)
     exits = copy0 + 4 * n
     # The copied body falls through to the first exit stub. That stub MUST be
@@ -578,7 +673,7 @@ def site_window(seg):
         words.append(w)
     for w in words: emit(w)
     for t in ex_targets:
-        emit(STRX(S, T)); emit(LDP(S, T, 31, -16)); emit(B(here(), t)); emit(NOP)
+        emit(STRX(S, T)); unstash(S, T); emit(B(here(), t)); emit(NOP)
     return start, lo, hi
 
 # ---- 函数边界（eh_frame_hdr）----
@@ -793,8 +888,8 @@ for wseg in windows:
     st, lo, hi = site_window(wseg); stat('window'); put_branch(lo, st)
 for prefix, (call, word) in sorted(calls.items()):
     st = here()
-    block = prepare_call(word, prefix, call, st, KEY_PAGE_OFF, KEY_INDEX['K18'])
-    fix.append((len(patch) + 12, 'K18'))
+    block = prepare_call(word, prefix, call, st, KEY_PAGE_OFF, KEY_INDEX['K18'], target=TARGET)
+    fix.append((len(patch) + (16 if NOREDZONE else 12), 'K18'))
     patch.extend(block)
     put_branch(prefix, st)
     assert struct.unpack_from('<I', IMG, call)[0] == BLR_X18
@@ -1006,7 +1101,7 @@ for oa, wa, ob_, wb, r, key, why in params:
         assert r not in regs_in(ins), f'参数位中间用到 x{r}：{o:#x} {ins.mnemonic} {ins.op_str}'
     start = here()
     tmp = 16 if r != 16 else 17
-    emit(STUR(tmp, 31, -16)); emit(MRS_TPIDRRO(r)); emit_slot_addr(r, tmp, key); emit(LDRX(r, r)); emit(LDUR(tmp, 31, -16)); emit(B(here(), oa + 4))
+    emit(STR_PRE(tmp, 31, -16) if NOREDZONE else STUR(tmp, 31, -16)); emit_tp(r); emit_slot_addr(r, tmp, key); emit(LDRX(r, r)); emit(LDR_POST(tmp, 31, 16) if NOREDZONE else LDUR(tmp, 31, -16)); emit(B(here(), oa + 4))
     struct.pack_into('<I', IMG, oa, B(oa, start)); struct.pack_into('<I', IMG, ob_, NOP); stat('param')
 
 # 既有三块原生规则跳板均只使用后继覆盖的死临时w8，不改w0/stat返回、sp或NZCV。
@@ -1067,6 +1162,7 @@ if RULE_RUN:
 elif os.path.exists(P('rules.tsv')):
     os.unlink(P('rules.tsv'))  # 重出native时清本模块旧规则登记，不让旧manifest混入原资源域 | When rebuilding native, clear this module's old rule registration so the old manifest does not leak into the original-resource domain
 with open(P('fixups.tsv'), 'w') as f:
+    if NOREDZONE: f.write('# TARGET_ANDROID\t1\n')
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
 with open(P('gates.tsv'), 'w') as f:
