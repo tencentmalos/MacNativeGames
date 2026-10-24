@@ -4,6 +4,7 @@
 #include "guest_runtime.h"
 #include "expected_modules.h"
 #include "port_runtime.h"
+#include "guest_memory.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -32,6 +33,7 @@ void runtime_gate();
 uint64_t mng_call_guest(void* function, uintptr_t stack, uint64_t argument);
 #ifdef MNG_STARTUP_PROBE
 uint64_t mng_call_guest_startup(void* function, uintptr_t stack, const uint64_t* arguments);
+void mng_guest_loader_ready();
 #endif
 __attribute__((visibility("hidden"))) uint64_t runtime_hle_tsd_off;
 }
@@ -178,6 +180,7 @@ struct Session {
     std::atomic<uint64_t> calls{};
     std::atomic<uint64_t> sleeps{};
     std::mutex error_mutex; std::string worker_error;
+    std::unique_ptr<mng::port::GuestMemory> memory;
     // Clear debugger bindings before module mappings and TLS keys are destroyed.
     mng::port::DebugSession debug;
     void publish_debug(const char* phase, Json detail=Json::object()) {
@@ -193,6 +196,11 @@ struct Session {
 #ifdef MNG_STARTUP_PROBE
     std::string startup_symbol;
     std::array<uint64_t,4> startup_entropy{};
+    // Initial guest main-thread policy, matching the existing native host.
+    // Only this registered thread exists during the isolated startup probe.
+    static constexpr uint32_t main_handle=0x100;
+    static constexpr uint32_t main_priority=44;
+    static constexpr uint64_t main_core_mask=7;
     Json startup_services=Json::array();
     [[noreturn]] void stop_startup(const std::string& reason, uint64_t ret=0, const uint64_t* regs=nullptr) {
         Json result=report("sdk_startup");
@@ -228,6 +236,20 @@ struct Session {
         arc4random_buf(startup_entropy.data(),sizeof(startup_entropy));
         Mapping guest(2u<<20,true),host(2u<<20),environment(16384,true);
         for(auto* stack:{&guest,&host}){stack->protect(0,page_size(),PROT_NONE);stack->protect(stack->size-page_size(),page_size(),PROT_NONE);}
+        mng::port::MemoryConfig config;
+        for(const auto& m:modules)config.image_size+=m.key;
+        memory=std::make_unique<mng::port::GuestMemory>(config);
+        for(const auto& m:modules) {
+            const auto base=uintptr_t(m.mapping->base),text_end=up(m.text),ro_end=m.data&~(page_size()-1);
+            memory->register_mapping(base,text_end,3,5);
+            if(ro_end>text_end)memory->register_mapping(base+text_end,ro_end-text_end,3,1);
+            if(m.key>ro_end)memory->register_mapping(base+ro_end,m.key-ro_end,4,3);
+            memory->register_mapping(base+m.key,16384,4,1);
+            if(m.patch>m.key+16384)memory->register_mapping(base+m.key+16384,m.patch-m.key-16384,4,3);
+            memory->register_mapping(base+m.patch,m.mapping->size-m.patch,3,5);
+        }
+        memory->register_mapping(uintptr_t(guest.base)+page_size(),guest.size-2*page_size(),0xb,3);
+        memory->register_mapping(uintptr_t(environment.base),environment.size,0xc,3);
         Worker context{this,uintptr_t(host.base)+page_size(),uintptr_t(host.base)+host.size-page_size()};active_worker=&context;
         keys.set(0,nullptr);keys.set(1,environment.base);keys.set(2,environment.base+8192);
         keys.set(3,reinterpret_cast<void*>(runtime_gate));keys.set(8,reinterpret_cast<void*>(context.host_end-64));
@@ -236,10 +258,8 @@ struct Session {
             {"guest_stack_high",uintptr_t(guest.base)+guest.size-page_size()},{"guest_tls",uintptr_t(environment.base)},
             {"guest_tlr",uintptr_t(environment.base)+8192},{"guest_x18_slot",tsd_base()+keys.offsets[0]},
             {"platform_x18",platform_x18()},{"entry_vendor_symbol",startup_symbol}});
-        // Reserve a main-thread identity for the future thread service table.
-        // No unsupported thread query is acknowledged by this probe.
         const uint64_t callback=reinterpret_cast<uintptr_t>(startup_callback);
-        const std::array<uint64_t,8> args={0x100,0,callback,callback,callback,0,0,0};
+        const std::array<uint64_t,8> args={main_handle,0,reinterpret_cast<uintptr_t>(mng_guest_loader_ready),callback,callback,0,0,0};
         mng_call_guest_startup(reinterpret_cast<void*>(entry->second),uintptr_t(guest.base)+guest.size-page_size()-64,args.data());
         stop_startup("SDK Start unexpectedly returned");
     }
@@ -373,6 +393,10 @@ struct Session {
     }
     Json report(const char* phase) {
         Json result={{"status","pass"},{"title",title},{"manifest_sha256",manifest_hash},{"phase",phase},{"host_page_size",page_size()},{"guest_address_bits",39},{"modules",Json::array()}};
+        if(memory)result["memory"]={{"aslr_base",memory->base()},{"aslr_size",memory->size()},
+            {"heap_base",memory->heap()},{"heap_size",memory->heap_size()},
+            {"alias_base",memory->alias()},{"alias_bytes",memory->alias_bytes()},
+            {"pool_size",*memory->info(6)},{"used_size",*memory->info(7)}};
         for(const auto& m:modules)result["modules"].push_back({{"name",m.name},{"build_id",m.build_id},{"base",uintptr_t(m.mapping->base)},{"relative",m.relative},{"symbolic",m.symbolic},{"cross",m.cross},{"weak_zero",m.weak}});
         return result;
     }
@@ -389,7 +413,7 @@ struct Session {
 std::mutex execution_mutex;
 #ifdef MNG_STARTUP_PROBE
 [[noreturn]] void startup_callback() {
-    active_worker->session->stop_startup("SDK reached its first loader callback; module initialization is not connected");
+    active_worker->session->stop_startup("SDK reached its module-constructor callback; module initialization is not connected");
 }
 #endif
 }
@@ -404,6 +428,53 @@ extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t 
     auto& s=*w->session;auto g=s.gates.find(ret);
     if(g==s.gates.end()) {fprintf(stderr,"Unknown guest gate at %#llx\n",(unsigned long long)ret);abort();}
 #ifdef MNG_STARTUP_PROBE
+    if(!s.startup_symbol.empty() && !g->second.timer && s.memory) {
+        const auto svc=g->second.arg;
+        bool handled=false;
+        Json detail={{"svc",svc}};
+        try {
+            if(svc==0x29) {
+                if(auto value=s.memory->info(uint32_t(regs[1]))) {
+                    detail["info_id"]=regs[1];detail["sub_id"]=regs[3];
+                    if(uint32_t(regs[2])!=0xffff8001u)regs[0]=(114u<<9)|1;
+                    else if(regs[3])regs[0]=(14u<<9)|1;
+                    else {regs[0]=0;regs[1]=*value;}
+                    handled=true;
+                }
+            } else if(svc==0x06) {
+                detail["address"]=regs[2];
+                if(!s.memory->accessible(regs[0],sizeof(mng::port::MemoryInfo),2))regs[0]=(115u<<9)|1;
+                else {const auto info=s.memory->query(regs[2]);memcpy(reinterpret_cast<void*>(regs[0]),&info,sizeof(info));regs[0]=0;regs[1]=0;}
+                handled=true;
+            } else if(svc==0x01) {
+                detail["size"]=regs[1];regs[0]=s.memory->set_heap_size(regs[1]);
+                if(!regs[0])regs[1]=s.memory->heap();handled=true;
+            } else if(svc==0x02) {
+                detail["address"]=regs[0];detail["size"]=regs[1];detail["permission"]=regs[2];
+                regs[0]=s.memory->set_permission(regs[0],regs[1],uint32_t(regs[2]));handled=true;
+            } else if(svc==0x04 || svc==0x05) {
+                detail["destination"]=regs[0];detail["source"]=regs[1];detail["size"]=regs[2];
+                regs[0]=s.memory->map_stack(regs[0],regs[1],regs[2],svc==0x05);handled=true;
+            } else if(svc==0x2c || svc==0x2d) {
+                detail["address"]=regs[0];detail["size"]=regs[1];
+                regs[0]=s.memory->map_physical(regs[0],regs[1],svc==0x2d);handled=true;
+            } else if(svc==0x0c || svc==0x0e || svc==0x25) {
+                detail["thread_handle"]=regs[1];
+                if(regs[1]!=Session::main_handle && regs[1]!=0xffff8000u)regs[0]=(114u<<9)|1;
+                else {
+                    regs[0]=0;
+                    if(svc==0x0c)regs[1]=Session::main_priority;
+                    else if(svc==0x0e){regs[1]=0;regs[2]=Session::main_core_mask;}
+                    else regs[1]=uint64_t(gettid());
+                }
+                handled=true;
+            }
+        } catch(const std::exception& e) {s.stop_startup(std::string("Guest memory host failure: ")+e.what(),ret,regs);}
+        if(handled) {
+            if(s.startup_services.size()>=256)s.stop_startup("Startup service-call budget exceeded",ret,regs);
+            detail["result"]=regs[0];s.startup_services.push_back(std::move(detail));return;
+        }
+    }
     if(!s.startup_symbol.empty() && !g->second.timer && g->second.arg==0x29 &&
        regs[1]==11 && regs[2]==0 && regs[3]<s.startup_entropy.size()) {
         // Existing services.c identifies this query as RandomEntropy. Keep

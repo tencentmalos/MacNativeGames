@@ -23,6 +23,7 @@ endforeach()
 # Standalone modules: do not import Foundation's renderer or emulator services.
 if(ANDROID)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../porting ${CMAKE_BINARY_DIR}/porting)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../porting/nvn_vulkan ${CMAKE_BINARY_DIR}/nvn-vulkan)
     add_subdirectory(${OBOE_SOURCE_DIR} ${CMAKE_BINARY_DIR}/oboe EXCLUDE_FROM_ALL)
 endif()
 add_subdirectory(${FOUNDATION_SOURCE_DIR}/modules/audio ${CMAKE_BINARY_DIR}/foundation-audio)
@@ -61,7 +62,7 @@ if(ANDROID)
         "${FOUNDATION_SOURCE_DIR}/third_party/nlohmann_json/include")
     target_link_options(mng_startup_probe PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384)
     add_library(macnative_platform SHARED native/jni.cpp native/audio.cpp)
-    target_link_libraries(macnative_platform PRIVATE mng_input mng_guest_runtime spatial::foundation_audio log)
+    target_link_libraries(macnative_platform PRIVATE mng_input mng_guest_runtime mng_nvn_vulkan spatial::foundation_audio log)
     target_link_options(macnative_platform PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384)
     # Compile the real Zelda mixer against the Android endpoint. Linking the
     # full Horizon runtime is a separate stage; no fake service stubs here.

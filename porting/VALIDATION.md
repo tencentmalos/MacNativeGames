@@ -1,5 +1,37 @@
 # BOTW 移植底座验证记录
 
+## 2026-10-24：内存服务与 Vulkan 实测（当前检查点）
+
+本轮只运行 BOTW 1.6.0，没有推进 TOTK。原始 main Build ID 仍为
+`8e9978d50bdd20b4c8395a106c27ffde`，SDK Build ID 仍为
+`fcf93a41b08c5193a1410d262602dc621617c56f`。没有更换模块清单、游戏文件或启用新的 guest patch。
+
+- Mac 16 KiB 页宿主：共享底座与新增内存测试 **2/2 通过**。Odin3 4 KiB 页宿主：
+  独立内存测试通过，覆盖真实预留、预算、重叠页、清零、栈写回、锁定源和权限。
+- 原始 BOTW SDK 成功完成 **16 次启动服务调用**，越过 ASLR/栈/别名区/内存量查询与首个
+  loader 通知，停在 `ConnectToNamedPort`（SVC `0x1f`，SDK 偏移 `0x37eb50`）。
+  独立探针保留 `blocked` 和退出码 3；仍未执行模块构造函数、`nnMain` 或游戏。
+- 原生 NVN 前端注册 **113 个入口**，链接固定版本 D2R 独立 Vulkan 引擎。
+  Odin3 / Adreno 830 上 **4 次提交、3 个离线测试 shader、1 个 draw、1 个 dispatch** 通过：
+  2048 个 RGBA 像素、128 个裁剪像素、64 个 storage buffer 输出字逐项检查；
+  同时验证 CopyCommands 的复制语义、GPU fence、读回和紧凑对象/视图边界。
+- APK `0.4-memory-vulkan`（versionCode 4）已在 Odin3 `6edb0593` 原位安装。
+  `assembleBotwDebug`、`assembleBotwDebugAndroidTest`、`lintBotwDebug` 通过。
+  Instrumentation **4/4 通过且没有跳过**：模块导入/拒绝错误输入/重复原生会话、
+  连续两次 GPU 会话、手柄会话、音频回调消费。没有清除应用数据。
+
+APK SHA-256：
+`0c0395019c281ad1ba485f423e74ef06d9303873bc55af8db89ce758ccf7ae67`。
+本机 APK 为 `native-switch-study/porting-20261024/artifacts/BOTW-Android-memory-vulkan-arm64-debug.apk`；
+原始日志同目录上级，分别为 `mng_startup_probe-memory-final.log`、`memory-probe-final.log`、
+`vulkan-probe-final.log`、`apk-memory-vulkan-compute-tests.log`。
+
+接口、依赖和明确限制见 [Vulkan 接入说明](nvn_vulkan/README.md)。测试 shader 完全由本仓库手写 GLSL 生成，
+不能作为 BOTW shader 正确性或实际游戏性能证据。尚需接入服务管理器 IPC、线程/构造函数、
+guest NVN 调用桥、BOTW shader 包及 Surface 呈现；当前 APK 仍不能游玩。
+
+## 此前检查点（保留历史结果）
+
 日期：2026-10-24。源码基线为用户 fork 的 `codex/android-zelda` 分支上 `c7fcac6`，加上本阶段修改。本阶段仅推进 BOTW 1.6.0，未重建、安装或使用现有 TOTK APK 验收。
 
 ## 已实现与已验证范围

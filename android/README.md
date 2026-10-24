@@ -4,7 +4,7 @@
 
 实测结果与待完成的运行时工作见 [验证记录](VALIDATION.md)。
 
-当前**只推进 BOTW 1.6.0**，版本为 `0.3-foundation`。现有 TOTK 预览保留在 `0.2-runtime`，开发循环不要同时构建两个 flavor。Mac/Android 公共底座设计、补丁策略和调试约定见 [移植底座](../porting/README.md)，当前证据见[底座验证记录](../porting/VALIDATION.md)。
+当前**只推进 BOTW 1.6.0**，版本为 `0.4-memory-vulkan`。现有 TOTK 预览保留在 `0.2-runtime`，开发循环不要同时构建两个 flavor。Mac/Android 公共底座设计、补丁策略和调试约定见 [移植底座](../porting/README.md)，当前证据见[底座验证记录](../porting/VALIDATION.md)。
 
 ## 当前能力边界
 
@@ -20,9 +20,9 @@
 - Foundation Android 手柄采集与原生 InputHub，按物理按键位置映射 Switch FullKey。原生会话 token 和连接代次拒绝过期输入；失焦/暂停结束输入会话并释放按键。
 - Zelda 混音器已有 Foundation 输出分支。生产线程将有明确所有权的 PCM 交给 Foundation 回调混音器，Oboe 实时回调不调用 guest 混音器。关闭时取消待提交数据并等待线程结束，再释放混音上下文。APK 构建会编译真实混音器的 Android 版本，但完整 guest 运行时尚未链接到 APK。
 
-尚未实现原始 SDK 初始化/构造函数、完整 Horizon 线程/内存/IPC 服务集成、NVN 到 Vulkan 的接入、Zelda XGS 生成、游戏生命周期/存档/导入、振动分发、陀螺仪和屏幕触控。当前原生适配器不宣称支持触觉反馈，也没有 Android Zelda 帧率结果。
+已增加共享内存服务和原生 NVN→Vulkan 组件，具体范围见 [Vulkan 接入说明](../porting/nvn_vulkan/README.md)。仍未完成完整 SDK 初始化/构造函数、Horizon 线程/IPC 服务、guest NVN 调用跳板、BOTW shader 包与窗口呈现、游戏生命周期/存档/导入、振动分发、陀螺仪和屏幕触控。当前原生适配器不宣称支持触觉反馈，也没有 Android Zelda 帧率结果。
 
-可选的**独立** `mng_startup_probe` 能进入原始 SDK Start 导出，报告首个不支持的服务。它不打入 APK，也不通过 JNI 暴露。15 秒进程期限及不支持操作时的非零退出码，将部分启动与游戏启动成功区分。首个已实现启动查询为进程随机熵；Odin 3 上后续请求分别为 BOTW ASLR 范围、TOTK 堆地址。详见 `VALIDATION.md`。
+可选的**独立** `mng_startup_probe` 能进入原始 SDK Start 导出，报告首个不支持的服务。它不打入 APK，也不通过 JNI 暴露。15 秒进程期限及不支持操作时的非零退出码，将部分启动与游戏启动成功区分。BOTW 已通过熵、ASLR、栈、别名区、内存用量和主线程查询，执行并返回首个 loader 通知，随后明确停于 `ConnectToNamedPort`（SVC `0x1f`）。本阶段不运行 TOTK。详见 `VALIDATION.md`。
 
 ## 构建
 
@@ -32,7 +32,8 @@
 cd android
 ./gradlew :app:assembleBotwDebug :app:lintBotwDebug \
   -PfoundationDir=/absolute/path/to/foundation \
-  -PoboeDir=/absolute/path/to/oboe
+  -PoboeDir=/absolute/path/to/oboe \
+  -Pd2rDir=/absolute/path/to/d2r-mobile
 ```
 
 包名为 `org.macnative.android.botw` 和 `org.macnative.android.totk`。均要求 Android 12 或更高版本及 ARM64。wrapper 固定 Gradle 9.8.1 和发行包 SHA-256。Foundation Kotlin 源码使用 AGP 9 的 [AndroidSourceSet.kotlin API](https://developer.android.com/build/migrate-to-built-in-kotlin)。Android 依赖许可见 `THIRD_PARTY_NOTICES.md`。
@@ -40,10 +41,13 @@ cd android
 ```sh
 ./gradlew :app:connectedBotwDebugAndroidTest \
   -PfoundationDir=/absolute/path/to/foundation \
-  -PoboeDir=/absolute/path/to/oboe
+  -PoboeDir=/absolute/path/to/oboe \
+  -Pd2rDir=/absolute/path/to/d2r-mobile
 ```
 
-Instrumentation 测试提交合成手柄事件，并播放低音量的 250 ms 测试音，要求 Foundation 设备回调实际消费 PCM。这不能证明实体手柄映射或可听输出质量。
+**Verify Vulkan rendering** 使用独立缓存目录中的手写 shader，验证实际 Vulkan 清屏、绘制、计算、GPU 读回和资源关闭；不启动游戏，不使用 BOTW shader。
+
+Instrumentation 测试还会连续运行两次 Vulkan 会话，提交合成手柄事件，并播放低音量的 250 ms 测试音，要求 Foundation 设备回调实际消费 PCM。这不能证明实体手柄映射或可听输出质量。
 
 ## 在私有目录准备游戏模块
 

@@ -25,6 +25,7 @@ object Native {
     external fun packet(token: Long, id: Long, epoch: Long, sequence: Long, control: Int, kinds: IntArray, codes: IntArray, values: FloatArray): Boolean
     external fun status(): String
     external fun audioProbe(): String
+    external fun vulkanProbe(directory: String): String
     external fun modules(directory: String, title: String, execute: Boolean): String
 }
 
@@ -75,6 +76,17 @@ class PlatformActivity : Activity() {
                 isEnabled = false
                 executor.execute {
                     val result = Native.audioProbe()
+                    handler.post { if (!isDestroyed) { text = result; isEnabled = true } }
+                }
+            }
+        })
+        column.addView(Button(this).apply {
+            text = "Verify Vulkan rendering"
+            setOnClickListener {
+                isEnabled = false
+                executor.execute {
+                    val directory = java.io.File(cacheDir, "nvn-self-test/shaders").apply { mkdirs() }
+                    val result = Native.vulkanProbe(directory.absolutePath)
                     handler.post { if (!isDestroyed) { text = result; isEnabled = true } }
                 }
             }

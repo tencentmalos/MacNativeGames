@@ -88,7 +88,7 @@ Mac 的 `port-debug-manifest.json` 由 `games/totk/scripts/prepare_runtime.py` �
 | 4 | 首个正确 Vulkan 帧 | NVN 资源/描述符/同步、BOTW 专用离线 SPIR-V 与反射；保留版本和场景证据后与 Mac 实际游戏比较 |
 | 5 | 性能与扩展 | 保持正确性，测量冷/热着色器及管线开销；再考虑 TOTK 等其他游戏 |
 
-BOTW 当前在熵查询之后停于 `GetInfo(AslrRegionAddress)`。下一步使用上述调试与身份设施推进里程碑 1。即使着色器翻译离线完成，Vulkan 管线缓存仍依赖设备和驱动。不能移入 D2R 游戏着色器数据，也不能复用 Mac 帧率作为 Android 结果。
+BOTW 已通过启动阶段的内存查询和首个 loader 回调，目前停于 `ConnectToNamedPort`（服务管理器 IPC）。共享内存服务和首批 NVN→Vulkan 接口已落地，详见 [Vulkan 接入说明](nvn_vulkan/README.md)。下一步仍先闭合里程碑 1 的线程/IPC/构造函数链，再连接 guest NVN 调用桥；合成 GPU 测试不代表里程碑 4 的游戏画面已经完成。即使着色器翻译离线完成，Vulkan 管线缓存仍依赖设备和驱动。不能移入 D2R 游戏着色器数据，也不能复用 Mac 帧率作为 Android 结果。
 
 ## 构建与检查
 

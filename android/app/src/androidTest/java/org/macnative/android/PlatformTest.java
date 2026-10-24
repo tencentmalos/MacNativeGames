@@ -5,6 +5,18 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class PlatformTest {
+    @Test public void testNativeVulkanRendering() {
+        android.content.Context context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().getTargetContext();
+        java.io.File directory=new java.io.File(context.getCacheDir(),"nvn-self-test/shaders");
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        String report=Native.INSTANCE.vulkanProbe(directory.getAbsolutePath());
+        android.util.Log.i("MacNativeTest",report);
+        assertTrue(report,report.startsWith("PASS:"));
+        // Repeat to prove session shutdown releases renderer-owned state.
+        report=Native.INSTANCE.vulkanProbe(directory.getAbsolutePath());
+        assertTrue(report,report.startsWith("PASS:"));
+    }
+
     @Test public void testControllerSessionAndFocus() {
         Native n=Native.INSTANCE;long session=n.begin();
         try {

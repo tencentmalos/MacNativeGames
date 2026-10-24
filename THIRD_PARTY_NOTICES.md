@@ -48,3 +48,13 @@ is copied into this repository.
 
 The Android study builds are local development artifacts, not a binary release.
 Their source dependencies and applicable notices must accompany any distribution.
+
+## Android Vulkan 组件
+
+`android/dependencies.json` 固定 D2R Mobile 的 `758f5d41509af5cd38b7eb934bc2334bdb3e3342`。
+只编译 `dm/gfx/vulkan/engine`、`nvn_tex.c`、`nvn_deswizzle.c`；不链接 D2R 宿主、
+游戏补丁、音频输出或游戏 shader。NVN 接口适配器位于 `porting/nvn_vulkan`。
+
+许可原文同时打包在 APK 的 `assets/licenses`：D2R MIT、bcdec MIT/公有领域双许可、
+deko3d zlib（纹理布局算法）、h1k421 重建 NVN 头文件 MIT。法律许可原文保留英文。
+接口语义对照 Citron 的 NVN 前端与测试；没有复制 Citron 的 GPL GPU/内核实现到 MIT 底座。

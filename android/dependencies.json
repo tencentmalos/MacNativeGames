@@ -4,6 +4,11 @@
     "commit": "2f27d3bb41c1659d33b89905255fab2675fc0144",
     "modules": ["modules/audio", "modules/input"]
   },
+  "d2r_vulkan": {
+    "repository": "https://github.com/jhaizhou-ops/d2r-mobile.git",
+    "commit": "758f5d41509af5cd38b7eb934bc2334bdb3e3342",
+    "modules": ["dm/gfx/vulkan", "dm/gfx/nvn/nvn_tex.c", "dm/gfx/tex/nvn_deswizzle.c"]
+  },
   "oboe": {
     "repository": "git@github.com:tencentmalos/oboe.git",
     "commit": "987538b6ec4cb9e699b117a890e686de7a9302fa"

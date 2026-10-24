@@ -43,4 +43,13 @@ mng_call_guest_startup:
     add sp, sp, #160
     ret
 .size mng_call_guest_startup,.-mng_call_guest_startup
+// The first SDK loader notification has no work in the native Mac loader.
+// A leaf guest callback avoids entering host C++ on the guest stack.
+.globl mng_guest_loader_ready
+.hidden mng_guest_loader_ready
+.type mng_guest_loader_ready,%function
+.p2align 2
+mng_guest_loader_ready:
+    ret
+.size mng_guest_loader_ready,.-mng_guest_loader_ready
 .section .note.GNU-stack,"",@progbits

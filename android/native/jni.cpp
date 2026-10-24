@@ -2,6 +2,7 @@
 #include "input.h"
 #include "platform.h"
 #include "guest_runtime.h"
+#include "nvn_vulkan.h"
 #include <jni.h>
 #include <cmath>
 #include <chrono>
@@ -70,4 +71,12 @@ extern "C" JNIEXPORT jstring JNICALL JNI(audioProbe)(JNIEnv* e,jobject) {
     mng_audio_close(stream);
     char result[100];snprintf(result,sizeof result,"Foundation audio: supplied=%u consumed_frames=%llu",tone.frame,(unsigned long long)consumed);
     return e->NewStringUTF(result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL JNI(vulkanProbe)(JNIEnv* e,jobject,jstring directory) {
+    if(!directory)return e->NewStringUTF("FAIL: Missing shader-cache directory");
+    const char* text=e->GetStringUTFChars(directory,nullptr);if(!text)return nullptr;
+    std::string path(text);e->ReleaseStringUTFChars(directory,text);
+    char report[2048]{};mng_nvn_self_test(path.c_str(),report,sizeof(report));
+    return e->NewStringUTF(report);
 }
