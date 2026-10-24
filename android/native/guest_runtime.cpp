@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -29,6 +30,9 @@
 extern "C" {
 void runtime_gate();
 uint64_t mng_call_guest(void* function, uintptr_t stack, uint64_t argument);
+#ifdef MNG_STARTUP_PROBE
+uint64_t mng_call_guest_startup(void* function, uintptr_t stack, const uint64_t* arguments);
+#endif
 __attribute__((visibility("hidden"))) uint64_t runtime_hle_tsd_off;
 }
 namespace {
@@ -163,6 +167,9 @@ struct Module {
 struct Session;
 struct Worker { Session* session; uintptr_t host_begin,host_end; uint64_t calls{},sleeps{}; };
 thread_local Worker* active_worker;
+#ifdef MNG_STARTUP_PROBE
+[[noreturn]] void startup_callback();
+#endif
 struct Session {
     std::string title,manifest_hash;
     Keys keys;
@@ -173,6 +180,55 @@ struct Session {
     std::atomic<uint64_t> calls{};
     std::atomic<uint64_t> sleeps{};
     std::mutex error_mutex; std::string worker_error;
+#ifdef MNG_STARTUP_PROBE
+    std::string startup_symbol;
+    std::array<uint64_t,4> startup_entropy{};
+    Json startup_services=Json::array();
+    [[noreturn]] void stop_startup(const std::string& reason, uint64_t ret=0, const uint64_t* regs=nullptr) {
+        Json result=report("sdk_startup");
+        result["status"]="blocked";result["reason"]=reason;result["entry_vendor_symbol"]=startup_symbol;
+        result["completed_services"]=startup_services;
+        result["scope"]="Isolated SDK startup probe; no constructor, nnMain or graphics execution";
+        if (ret) {
+            for(const auto& m:modules)for(const auto& gate:m.gates)if(uintptr_t(m.mapping->base)+gate.ret==ret) {
+                Json location={{"module",m.name},{"build_id",m.build_id},{"module_offset",gate.original},
+                    {"guest_address",m.address(gate.original)},{"svc",gate.arg},{"registers",Json::array()}};
+                if(regs)for(unsigned i=0;i<8;++i)location["registers"].push_back(regs[i]);
+                location["vendor_symbol"]=nullptr;
+                location["unknown_reason"]="No containing defined STT_FUNC symbol with a nonzero size";
+                for(const auto& symbol:m.symbols)if(symbol.defined && symbol.type==2 && symbol.size &&
+                    gate.original>=symbol.value && gate.original-symbol.value<symbol.size) {
+                    location["vendor_symbol"]=symbol.name;
+                    location["function_offset"]=gate.original-symbol.value;
+                    location.erase("unknown_reason");break;
+                }
+                result["stop"]=std::move(location);
+            }
+        }
+        const auto text=result.dump()+"\n";
+        size_t done=0;while(done<text.size()) {const auto n=write(STDOUT_FILENO,text.data()+done,text.size()-done);if(n<0&&errno==EINTR)continue;if(n<=0)break;done+=size_t(n);}
+        // This path exists only in the standalone executable. The OS reclaims
+        // all guest mappings; unwinding across guest assembly is unnecessary.
+        _exit(3);
+    }
+    [[noreturn]] void startup() {
+        startup_symbol=title=="botw160"?"_ZN2nn4init5StartEmmPFvvES2_":"_ZN2nn4init5StartEmmPFvvES2_S2_";
+        const auto entry=exports.find(startup_symbol);require(entry!=exports.end(),"Original SDK Start export missing");
+        arc4random_buf(startup_entropy.data(),sizeof(startup_entropy));
+        Mapping guest(2u<<20,true),host(2u<<20),environment(16384,true);
+        for(auto* stack:{&guest,&host}){stack->protect(0,page_size(),PROT_NONE);stack->protect(stack->size-page_size(),page_size(),PROT_NONE);}
+        Worker context{this,uintptr_t(host.base)+page_size(),uintptr_t(host.base)+host.size-page_size()};active_worker=&context;
+        keys.set(0,nullptr);keys.set(1,environment.base);keys.set(2,environment.base+8192);
+        keys.set(3,reinterpret_cast<void*>(runtime_gate));keys.set(8,reinterpret_cast<void*>(context.host_end-64));
+        for(size_t i=0;i<keys.keys.size();++i)keys.check(i);
+        // Reserve a main-thread identity for the future thread service table.
+        // No unsupported thread query is acknowledged by this probe.
+        const uint64_t callback=reinterpret_cast<uintptr_t>(startup_callback);
+        const std::array<uint64_t,8> args={0x100,0,callback,callback,callback,0,0,0};
+        mng_call_guest_startup(reinterpret_cast<void*>(entry->second),uintptr_t(guest.base)+guest.size-page_size()-64,args.data());
+        stop_startup("SDK Start unexpectedly returned");
+    }
+#endif
 
     Session(const std::string& directory,const std::string& title):title(title) {
         require(title=="botw160" || title=="totk100","Unsupported title profile");
@@ -313,17 +369,37 @@ struct Session {
     }
 };
 std::mutex execution_mutex;
+#ifdef MNG_STARTUP_PROBE
+[[noreturn]] void startup_callback() {
+    active_worker->session->stop_startup("SDK reached its first loader callback; module initialization is not connected");
+}
+#endif
 }
 extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t ret,uint64_t* regs) {
-    // Only timer and positive SleepThread gates execute here. Unsupported service
-    // calls fail; no successful Horizon service response is fabricated.
+    // The application supports timer and positive SleepThread gates. The
+    // standalone startup probe adds only explicitly implemented bootstrap SVCs.
+    // Unsupported service calls fail rather than returning fabricated success.
     auto* w=active_worker;uintptr_t local=uintptr_t(&w);
     if(!w || local<w->host_begin || local>=w->host_end || w->session->keys.get(8)!=nullptr) {
         fprintf(stderr,"Android gate did not switch to its host stack\n");abort();
     }
     auto& s=*w->session;auto g=s.gates.find(ret);
     if(g==s.gates.end()) {fprintf(stderr,"Unknown guest gate at %#llx\n",(unsigned long long)ret);abort();}
+#ifdef MNG_STARTUP_PROBE
+    if(!s.startup_symbol.empty() && !g->second.timer && g->second.arg==0x29 &&
+       regs[1]==11 && regs[2]==0 && regs[3]<s.startup_entropy.size()) {
+        // Existing services.c identifies this query as RandomEntropy. Keep
+        // four process-scoped words, supplied by Bionic's system random source.
+        // Never publish those values in the diagnostic report.
+        if(s.startup_services.size()>=256)s.stop_startup("Startup service-call budget exceeded",ret,regs);
+        s.startup_services.push_back({{"svc",0x29},{"info_id",11},{"sub_id",regs[3]}});
+        regs[1]=s.startup_entropy[regs[3]];regs[0]=0;return;
+    }
+#endif
     if(g->second.timer) {
+#ifdef MNG_STARTUP_PROBE
+        if(!s.startup_symbol.empty() && w->calls>=10000)s.stop_startup("Startup timer-call budget exceeded",ret,regs);
+#endif
         regs[g->second.arg]=uint64_t((__uint128_t(now_ns())*12)/625);
         ++w->calls;s.calls.fetch_add(1,std::memory_order_relaxed);
     } else if(g->second.arg==0x0b && regs[0]>0 && regs[0]<=1000000000) {
@@ -332,9 +408,23 @@ extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t 
         timespec left{time_t(regs[0]/1000000000),long(regs[0]%1000000000)};
         while(nanosleep(&left,&left)!=0)if(errno!=EINTR)abort();
         regs[0]=0;++w->sleeps;s.sleeps.fetch_add(1,std::memory_order_relaxed);
-    } else {fprintf(stderr,"Unsupported guest SVC %#x at %#llx\n",g->second.arg,(unsigned long long)ret);abort();}
+    } else {
+#ifdef MNG_STARTUP_PROBE
+        if(!s.startup_symbol.empty())s.stop_startup("Unsupported startup SVC",ret,regs);
+#endif
+        fprintf(stderr,"Unsupported guest SVC %#x at %#llx\n",g->second.arg,(unsigned long long)ret);abort();
+    }
 }
 namespace mng {
+#ifdef MNG_STARTUP_PROBE
+[[noreturn]] void startup_probe(const std::string& directory,const std::string& title) {
+    try { Session session(directory,title);session.startup(); }
+    catch(const std::exception& e) {
+        const auto report=Json({{"status","fail"},{"phase","sdk_startup"},{"error",e.what()}}).dump();
+        fprintf(stdout,"%s\n",report.c_str());fflush(stdout);_exit(2);
+    }
+}
+#endif
 std::string validate_modules(const std::string& directory,const std::string& title) {
     std::lock_guard lock(execution_mutex);
     try { Session session(directory,title);return session.report("validated").dump(); }

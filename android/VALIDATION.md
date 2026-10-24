@@ -82,6 +82,49 @@ picker validation, and subsequent checks ran in the background.
 This does not execute `nn::init::Start`, DT_INIT constructors, `nnMain`, NVN or
 Vulkan. No game state or save was opened or modified.
 
+## Isolated SDK startup follow-up
+
+The separately built `mng_startup_probe` does enter the original, exported
+`nn::init::Start` on a guarded guest stack. This diagnostic is compiled with
+`MNG_STARTUP_PROBE` into its own executable only; neither the JNI library nor the
+APKs expose it. Unsupported SVCs print a structured `blocked` report and exit 3,
+invalid inputs exit 2, and a 15-second deadline exits 4. It never acknowledges an
+unsupported service or runs the module-initializer callback.
+
+Both exact title profiles were run in fresh processes on the Odin 3. Both first
+requested GetInfo (SVC `0x29`), information ID 11, sub-IDs 2 and 3. These process
+entropy queries are now backed by four session-stable words from Bionic's system
+random source; random values are not written to the report. The original SDK then
+advanced to these missing memory-layout queries:
+
+| Profile | Next information ID | Meaning in the existing host | Original SVC location |
+| --- | ---: | --- | --- |
+| botw160 | 12 | ASLR region address | sdk + `0x37ebc0` |
+| totk100 | 4 | Heap region address | sdk + `0x1584b0` |
+
+These are observed offsets in the exact hash-gated SDK modules, not imported
+patch addresses. The report carries each SDK Build ID, module-relative offset,
+mapped guest address and input registers. Neither location has a containing
+nonzero-sized vendor function symbol in the packaged dynamic table, so the
+report explicitly leaves its symbol unknown. The entry-point names are original
+vendor exports. A mismatched title profile was rejected before execution.
+
+Memory reservations, committed-page accounting and QueryMemory must now agree
+before answering these queries. The probe currently stops there. It does not
+reach the first loader callback, constructors, `nnMain` or any renderer, and it
+does not modify saves. This is startup evidence, not a passing boot test.
+
+Build the optional executable with the configured Android CMake build directory:
+
+```sh
+cmake --build <android-cmake-build> --target mng_startup_probe
+adb -s <device> push <native-output>/mng_startup_probe /data/local/tmp/mng_startup_probe
+adb -s <device> shell /data/local/tmp/mng_startup_probe <private-prepared-directory> botw160
+```
+
+The process is independent of the application foreground. Its reports and all
+prepared game data remain private local test artifacts.
+
 ## Build checks and local artifacts
 
 - Upstream Python suite with Xcode 26: **332 tests passed**.
@@ -99,6 +142,8 @@ Vulkan. No game state or save was opened or modified.
 
 Package IDs remain `org.macnative.android.botw` and `org.macnative.android.totk`,
 version code 2, version name `0.2-runtime`, ARM64, minimum Android 12.
+The installed and archived APKs below are the validated `dc80ba7` checkpoint;
+the subsequent standalone startup diagnostic is a separate executable.
 
 | APK | Bytes | SHA-256 |
 | --- | ---: | --- |

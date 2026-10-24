@@ -50,6 +50,14 @@ if(ANDROID)
     add_executable(mng_runtime_probe native/guest_probe_main.cpp)
     target_link_libraries(mng_runtime_probe PRIVATE mng_guest_runtime)
     target_link_options(mng_runtime_probe PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384)
+    # A separate process may enter SDK startup and stop at the first unsupported
+    # service. Its process-exit diagnostics must never be exposed through JNI.
+    add_executable(mng_startup_probe native/guest_startup_main.cpp native/guest_runtime.cpp
+        native/guest_call.S native/guest_startup_call.S third_party/d2r/sha256.c "${android_gate}")
+    target_compile_definitions(mng_startup_probe PRIVATE MNG_STARTUP_PROBE=1)
+    target_include_directories(mng_startup_probe PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
+        "${FOUNDATION_SOURCE_DIR}/third_party/nlohmann_json/include")
+    target_link_options(mng_startup_probe PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384)
     add_library(macnative_platform SHARED native/jni.cpp native/audio.cpp)
     target_link_libraries(macnative_platform PRIVATE mng_input mng_guest_runtime spatial::foundation_audio log)
     target_link_options(macnative_platform PRIVATE -Wl,--no-undefined -Wl,-z,max-page-size=16384)

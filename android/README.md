@@ -47,6 +47,13 @@ NVN-to-Vulkan connection and Zelda XGS generation, game lifecycle/saves/import,
 rumble dispatch, gyro and on-screen controls. Haptics are not advertised as a
 capability by the current native adapter. No Android Zelda FPS result exists.
 
+An opt-in **standalone** `mng_startup_probe` can enter the original SDK Start
+export and report the first unsupported service. It is not packaged into either
+APK or exposed through JNI. Its 15-second process deadline and nonzero exit on an
+unsupported operation keep partial startup distinct from a successful game boot.
+The first implemented startup query is process random entropy; the next requests
+on Odin 3 are the BOTW ASLR range and TOTK heap address. See `VALIDATION.md`.
+
 ## Build
 
 Use JDK 17, SDK 36, NDK 29.0.14206865 and SDK CMake 3.22.1. Obtain the source
