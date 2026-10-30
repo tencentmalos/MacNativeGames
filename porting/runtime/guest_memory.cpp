@@ -64,6 +64,14 @@ void GuestMemory::register_mapping(uint64_t base, uint64_t size, uint32_t state,
          "Registered guest mappings overlap");
     segments_.emplace(base, Segment{base + size, state, 0, permission});
 }
+void GuestMemory::unregister_mapping(uint64_t base, uint64_t size) {
+    std::lock_guard lock(mutex_);
+    need(base < base_ || base >= base_ + size_, "Cannot unregister the owned arena");
+    const auto found=segments_.find(base);
+    need(size && found!=segments_.end() && found->second.end-base==size,
+         "External mapping identity mismatch");
+    segments_.erase(found);
+}
 MemoryInfo GuestMemory::query_locked(uint64_t address) const {
     if (address >= limit)
         return {limit, uint64_t(0) - limit, 0x10, 0, 0};

@@ -58,3 +58,32 @@ Their source dependencies and applicable notices must accompany any distribution
 许可原文同时打包在 APK 的 `assets/licenses`：D2R MIT、bcdec MIT/公有领域双许可、
 deko3d zlib（纹理布局算法）、h1k421 重建 NVN 头文件 MIT。法律许可原文保留英文。
 接口语义对照 Citron 的 NVN 前端与测试；没有复制 Citron 的 GPL GPU/内核实现到 MIT 底座。
+
+`porting/nvn_vulkan/prepare_engine.py` 在构建目录生成 D2R 引擎的适配副本：
+增加顶部时间戳、纹理 swizzle、depth clamp 与 BOTW 短 shader control 段哈希处理。
+原检出保持只读，生成副本仍适用 D2R 的 MIT 许可。`state_api.inc` 的状态打包器
+来自本仓库原有 MacNativeGames NVN 实现，保留 MIT 标识；不包含游戏地址或补丁字节。
+
+`attachment_alias_engine.inc` 对齐原 MacNativeGames `nvn_obj.h` 的
+`rt_dup_of`；原注释将该重复附件处理归属到
+[seedds/nxnative](https://github.com/seedds/nxnative)（MIT）。保留本仓库的
+`games/totk/third_party/licenses/nxnative.txt`。实现额外检查有效 format 和重复槽写掩码。
+
+## Android 启动器与状态层依赖
+
+- volk：MIT；外部固定版本见 `android/dependencies.json`，许可随 APK 保存。
+- libadrenotools / liblinkernsbypass：BSD-2-Clause，保留各自许可。
+- Mesa Turnip：按源码逐文件许可及 Mesa license 文档保留声明。静态链接的
+  NDK libc++/libc++abi/unwind 声明随 APK 的 `turnip-NDK-toolchain-NOTICE.txt` 保存。
+- Dear ImGui：MIT，官方 1.92.2b 宿主版本，与 Foundation 的状态层 ABI 配套。
+- FreeType：使用 FTL 许可选项，保留 `LICENSE.TXT` 与 `FTL.TXT`。
+- fmt：MIT，保留原许可。
+- Foundation `imgui_overlay`、`perf_metrics` 及其共享实现：源文件声明
+  “Copyright (c) 2026 tencentmalos. All rights reserved. For study and research only.
+  Not for redistribution.” 它不是 MIT 依赖，当前组合仅用于本地研究，不能公开再分发。
+- 背景和图标来自用户已有 EmuPSP Ghost/Nlib 缓存，Program ID `01007EF00011E000`。
+  图片权利属于原权利人，仅作为用户本地构建输入，不提交素材文件。
+
+## Foundation PSO preparation jobs
+
+The shared Mac/Android Vulkan backend links the pinned Foundation `basic/async/async_task`, core, reflection, allocator and property targets. The existing standalone profiler ring remains the single SDK owner. Local APK notices include `foundation-jobs.txt`, mimalloc MIT, the Boost Software License for Asio support, and Yalantinglibs Apache-2.0. This is a local research build under the existing Foundation distribution restriction.

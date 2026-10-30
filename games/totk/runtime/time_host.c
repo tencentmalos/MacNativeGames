@@ -3,7 +3,9 @@
    counts seconds of host continuous time with one source id per process. ClockSnapshot uses the public
    0xD0-byte layout because game code may read its fields through inline accessors. */
 #include "runtime.h"
+#ifndef __ANDROID__
 #include <mach/mach_time.h>
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,8 +33,14 @@ static pthread_once_t once = PTHREAD_ONCE_INIT;
 static void make_source(void) { arc4random_buf(source_id, sizeof source_id); }
 
 static int64_t steady_seconds(void) {
+#ifdef __ANDROID__
+    struct timespec now;
+    if (clock_gettime(CLOCK_BOOTTIME, &now)) runtime_fail("continuous clock unavailable");
+    return now.tv_sec;
+#else
     mach_timebase_info_data_t tb; mach_timebase_info(&tb);
     return (int64_t)((__uint128_t)mach_continuous_time() * tb.numer / tb.denom / 1000000000u);
+#endif
 }
 static SteadyClockTimePoint steady_now(void) { pthread_once(&once, make_source); SteadyClockTimePoint p = {steady_seconds(), {0}}; memcpy(p.source, source_id, 16); return p; }
 static int64_t posix_now(void) {

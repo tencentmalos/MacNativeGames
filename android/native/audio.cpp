@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "platform.h"
+#include "audio_queue.h"
+#include <chrono>
+#include <cstdio>
 #include <foundation/audio/oboe_output.h>
 #include <android/log.h>
 #include <thread>
@@ -12,17 +15,29 @@ namespace {
 struct Output {
     AndroidOutput endpoint;
     std::unique_ptr<AudioSource> source;
+    mng::AudioBlockQueue queue;
     std::jthread worker;
     Output(int rate, MngAudioPull pull, void *ctx)
-        : endpoint(AndroidOutputConfig{.sample_rate=rate}), source(endpoint.CreateSource(3)) {
-        if (!source) throw std::runtime_error("audio source allocation failed");
-        worker=std::jthread([this,rate,pull,ctx](std::stop_token stop) {
-            std::vector<float> pcm(size_t(rate/200)*2);
-            while(!stop.stop_requested()) {
-                pull(ctx,pcm.data(),unsigned(pcm.size()/2));
-                if(source->SubmitAndWait(pcm,stop)!=SubmitResult::Consumed) break;
+        : endpoint(AndroidOutputConfig{.sample_rate=rate,.observe=[](const DeviceSnapshot& d){
+            static thread_local uint64_t last{};
+            if(d.mixer.output_frames>=last+uint64_t(d.sample_rate)*5 || !last) {
+                last=d.mixer.output_frames;
+                fprintf(stderr,"[android-audio] rate=%d burst=%d output=%llu consumed=%llu starved=%llu queued=%llu xruns=%d generation=%llu\n",
+                    d.sample_rate,d.burst,(unsigned long long)d.mixer.output_frames,
+                    (unsigned long long)d.mixer.consumed_frames,(unsigned long long)d.mixer.starved_frames,
+                    (unsigned long long)d.mixer.queued_frames,d.xruns,(unsigned long long)d.generation);
             }
+        }}), source(endpoint.CreateSource(mng::AudioBlockQueue::Capacity)),
+          queue(*checked_source(),unsigned(rate/200),pull,ctx) {
+        if (!source) throw std::runtime_error("audio source allocation failed");
+        worker=std::jthread([this](std::stop_token stop) {
+            while(!stop.stop_requested() && queue.fill())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
         });
+    }
+    AudioSource* checked_source() {
+        if(!source)throw std::runtime_error("audio source allocation failed");
+        return source.get();
     }
     ~Output() { worker.request_stop(); source->RequestStop(); worker.join(); }
 };

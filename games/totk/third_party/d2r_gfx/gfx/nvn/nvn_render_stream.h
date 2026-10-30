@@ -59,6 +59,7 @@ static void rs_apply(id<MTL4RenderCommandEncoder> *enc, id<MTL4ArgumentTable> *v
     if (p->op != RS_BEGIN && !e) MDIE("render stream packet %llu without an encoder", (unsigned long long)p->op);
     switch (p->op) {
         case RS_BEGIN: {
+            uint64_t profile = mng_profile_flow_begin("Metal.Encode.BeginPass", (mng_profile_flow){u[6], u[7]});
             if (e) MDIE("render stream: pass begun while the previous one is open");
             MTL4RenderPassDescriptor *d = (__bridge MTL4RenderPassDescriptor *)(void *)(uintptr_t)u[0];
             id<MTL4CommandBuffer> cb = (__bridge id<MTL4CommandBuffer>)(void *)(uintptr_t)u[3];
@@ -72,6 +73,7 @@ static void rs_apply(id<MTL4RenderCommandEncoder> *enc, id<MTL4ArgumentTable> *v
             [e setArgumentTable:*vt atStages:MTLRenderStageVertex]; [e setArgumentTable:*ft atStages:MTLRenderStageFragment];
             CFRelease((CFTypeRef)(uintptr_t)u[0]);
             *enc = e; atomic_fetch_add_explicit(&g_rs_b_passes, 1, memory_order_relaxed);
+            mng_profile_end(profile);
             break; }
         case RS_END:
             if (u[0] == 2) [e barrierAfterStages:MTLStageVertex | MTLStageFragment beforeQueueStages:MTLStageFragment | MTLStageBlit | MTLStageDispatch visibilityOptions:(MTL4VisibilityOptions)u[1]];   /* TOTK_BARRIER_NARROW: later vertex stages do not wait */
@@ -106,21 +108,21 @@ static void *rs_worker(void *unused) {
     pthread_setname_np("TOTK encode stage");
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     id<MTL4RenderCommandEncoder> enc = nil; id<MTL4ArgumentTable> vt = nil, ft = nil;
-    uint64_t idle_since = 0, busy_since = 0;
+    uint64_t idle_since = 0, busy_since = 0, profile_busy = 0;
     for (;;) {
         const nvn_encode_packet *p = nvn_encode_fifo_peek(&g_rs_fifo);
         if (!p) {
             uint64_t now = rs_now();
-            if (busy_since) { atomic_fetch_add_explicit(&g_rs_b_busy_ns, now - busy_since, memory_order_relaxed); busy_since = 0; }
+            if (busy_since) { mng_profile_end(profile_busy); profile_busy = 0; atomic_fetch_add_explicit(&g_rs_b_busy_ns, now - busy_since, memory_order_relaxed); busy_since = 0; }
             if (!idle_since) idle_since = now;
             if (now - idle_since < RS_SPIN_NS) { __builtin_arm_wfe(); continue; }   /* low-power wait; A does sev after every publish */
             atomic_store_explicit(&g_rs_sleeping, 1, memory_order_seq_cst);
             atomic_thread_fence(memory_order_seq_cst);
-            if (!nvn_encode_fifo_peek(&g_rs_fifo)) { dispatch_semaphore_wait(g_rs_sem, DISPATCH_TIME_FOREVER); atomic_fetch_add_explicit(&g_rs_b_sleeps, 1, memory_order_relaxed); }
+            if (!nvn_encode_fifo_peek(&g_rs_fifo)) { MNG_PROFILE_SCOPE("Metal.Encode.Sleep"); dispatch_semaphore_wait(g_rs_sem, DISPATCH_TIME_FOREVER); atomic_fetch_add_explicit(&g_rs_b_sleeps, 1, memory_order_relaxed); }
             atomic_store_explicit(&g_rs_sleeping, 0, memory_order_seq_cst);
             idle_since = 0; continue;
         }
-        if (!busy_since) busy_since = rs_now();
+        if (!busy_since) { busy_since = rs_now(); profile_busy = mng_profile_begin("Metal.Encode.Burst"); }
         idle_since = 0;
         @autoreleasepool { rs_apply(&enc, &vt, &ft, p); }
         nvn_encode_fifo_consume(&g_rs_fifo);
@@ -137,6 +139,7 @@ static inline void rs_publish(void) {
 }
 static void rs_put(nvn_encode_packet p, int publish) {
     if (!nvn_encode_fifo_push(&g_rs_fifo, &p)) {   /* ring full: B is behind; wait for it (counted: this is A time lost to B) */
+        MNG_PROFILE_SCOPE("Metal.Encode.QueueFullWait");
         uint64_t t0 = rs_now(); g_rs_full_waits++;
         do { rs_publish(); __builtin_arm_wfe(); } while (!nvn_encode_fifo_push(&g_rs_fifo, &p));
         g_rs_full_ns += rs_now() - t0;
@@ -153,6 +156,7 @@ static void rs_copy(unsigned op, const void *data, size_t size) {
 /* A: wait until B has consumed everything queued so far. */
 static void rs_sync(void) {
     if (!g_rs_created) return;
+    MNG_PROFILE_SCOPE("Metal.Encode.Join");
     if (g_rs_active) MDIE("render stream: sync inside a streamed pass");
     rs_publish();
     uint64_t t0 = rs_now(), produced = g_rs_fifo.produced;
@@ -187,8 +191,9 @@ static int rs_stream_pass(void) {
 static id rs_pass_begin(MTL4RenderPassDescriptor *d, id<MTL4ArgumentTable> vt, id<MTL4ArgumentTable> ft, id<MTL4CommandBuffer> cb, int bar_start, uint64_t vis) {
     if (g_rs_active) MDIE("render stream: pass begun while another streamed pass is open");
     g_rs_active = 1; g_rs_passes++;
+    mng_profile_flow profile = mng_profile_post("Metal.Encode.PassQueued");
     rs_put((nvn_encode_packet){.op = RS_BEGIN, .u = {(uint64_t)(uintptr_t)CFBridgingRetain(d), (uint64_t)(uintptr_t)(__bridge void *)vt, (uint64_t)(uintptr_t)(__bridge void *)ft,
-                                                     (uint64_t)(uintptr_t)(__bridge void *)cb, (uint64_t)bar_start, vis}}, 1);
+                                                     (uint64_t)(uintptr_t)(__bridge void *)cb, (uint64_t)bar_start, vis, profile.id, profile.generation}}, 1);
     return g_rs_sentinel;
 }
 static int rs_using(id e) {

@@ -1,0 +1,122 @@
+{
+  "schema": "mng.guest-tags.guards.v1",
+  "target_id": "botw160-main",
+  "source": {
+    "nso": "15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+    "build_id": "8e9978d50bdd20b4c8395a106c27ffde00000000000000000000000000000000",
+    "android_rewrite_sha256": "cf5d57a21cd85a627de7c9c500957d971b81b6aebbc3360ed78edbe350b41884",
+    "manifest_sha256": "30513eed53bc4ae9bd1539c9e28dbffdb859b9c2c054fefd05aa9e0de3054f38",
+    "imports_csv_sha256": "eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+  },
+  "analysis_elf_sha256": "f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a",
+  "sites": [
+    {
+      "id": 0,
+      "name": "botw_RootTaskCalc",
+      "module_offset": "0xe3a2f0",
+      "first_word": "0xfc190fe8",
+      "sha256_first_16": "981993dbdda8d006a431f5faaa920054b562fd7a51b962efc45038f854d2e457",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 1,
+      "name": "gsys_SystemTask_preCalc_",
+      "module_offset": "0x1505460",
+      "first_word": "0xa9ba6ffc",
+      "sha256_first_16": "c7135061084e259ea3a4a16a84e6868d79373805ede8528ae2894114f3d30568",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 2,
+      "name": "gsys_SystemTask_postCalc_",
+      "module_offset": "0x1506a80",
+      "first_word": "0xa9ba6ffc",
+      "sha256_first_16": "c7135061084e259ea3a4a16a84e6868d79373805ede8528ae2894114f3d30568",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 3,
+      "name": "gsys_SystemTask_drawTV_",
+      "module_offset": "0x1507f70",
+      "first_word": "0xb9455408",
+      "sha256_first_16": "09ce5fc0f8ff8709f7138f462b7d7a409072d6cf113342b6ac5719a1883d05e2",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 4,
+      "name": "gsys_SystemTask_drawDRC_",
+      "module_offset": "0x1509ff0",
+      "first_word": "0xb9455408",
+      "sha256_first_16": "6560e9a432f29968f0864ed04fd439db0f8a9b360ad2008d85723c1dce46d6e6",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 5,
+      "name": "gsys_SystemTask_postDrawTV_",
+      "module_offset": "0x150a340",
+      "first_word": "0xd107c3ff",
+      "sha256_first_16": "d1c9be53fe734de9b7ef9995fc5e1e08d6e427b4a5f0e8e12594dc9f3d04e3bf",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 6,
+      "name": "gsys_SystemTask_postDrawDRC_",
+      "module_offset": "0x150a4c0",
+      "first_word": "0xd107c3ff",
+      "sha256_first_16": "d1c9be53fe734de9b7ef9995fc5e1e08d6e427b4a5f0e8e12594dc9f3d04e3bf",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 7,
+      "name": "sead_WorkerMgr_pushJobQueue_named",
+      "module_offset": "0x139ff60",
+      "first_word": "0xd10103ff",
+      "sha256_first_16": "52ad2bbff2142d6282e887c964c71b26731cea9f0a9e8e4863aba6ffb0f384df",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 8,
+      "name": "sead_WorkerMgr_run",
+      "module_offset": "0x13a0150",
+      "first_word": "0xf81b0ff9",
+      "sha256_first_16": "0ea3fdc27cb82a975da20348e51c947987d4eca38f1edd4055701c6ea441e91f",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 9,
+      "name": "sead_WorkerMgr_sync",
+      "module_offset": "0x13a03d0",
+      "first_word": "0xf81c0ff7",
+      "sha256_first_16": "7a4fd92319b705ad496a6ecb8fe6d71992fd82b0afdd44d574469e7ae6f7dd6c",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 10,
+      "name": "gsys_SystemTask_invokeCalcFrame_",
+      "module_offset": "0x150a940",
+      "first_word": "0x6db82beb",
+      "sha256_first_16": "ad9b2e656c5523b435d6e6e7c3eda49b5208d149e5aa6dfc03bf74584a2c56c2",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    },
+    {
+      "id": 11,
+      "name": "gsys_SystemTask_updateGPU_",
+      "module_offset": "0x150a640",
+      "first_word": "0xd10203ff",
+      "sha256_first_16": "6e41c9bbdfbe458f533cd0bb9011cf3ec5365ec46fe1712428548dd45b16452f",
+      "relocation": "one PC-independent instruction; original remainder unchanged",
+      "abi": "register-only AAPCS64; void return; x18 unused by adapter"
+    }
+  ]
+}

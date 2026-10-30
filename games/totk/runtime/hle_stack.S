@@ -26,7 +26,12 @@ _runtime_hle_switch:
     adrp x13, _runtime_hle_trace@PAGE
     ldr w13, [x13, _runtime_hle_trace@PAGEOFF]
     cbnz w13, 2f
-3:  blr x16
+3:
+#ifdef MNG_LITEP_RUNTIME
+    bl _runtime_hle_profile_call
+#else
+    blr x16
+#endif
     ldp x12, x11, [sp, #16]
     ldp x29, x30, [sp]
     mov sp, x12
@@ -38,19 +43,27 @@ _runtime_hle_switch:
 1:  adrp x13, _runtime_hle_trace@PAGE      // already on a host stack (nested call, or a host thread)
     ldr w13, [x13, _runtime_hle_trace@PAGEOFF]
     cbnz w13, 4f
+#ifdef MNG_LITEP_RUNTIME
+    b _runtime_hle_profile_call
+#else
     br x16
+#endif
 2:  bl hle_note_kept                        // x30 is in the frame record and is reloaded from it after the call
     b 3b
 4:  stp x29, x30, [sp, #-16]!
     mov x29, sp
     bl hle_note_kept
     ldp x29, x30, [sp], #16
+#ifdef MNG_LITEP_RUNTIME
+    b _runtime_hle_profile_call
+#else
     br x16
+#endif
 
 /* _runtime_hle_note(x17) with x0..x8, x16 and q0..q7 kept. */
     .p2align 2
 hle_note_kept:
-    stp x29, x30, [sp, #-224]!
+    stp x29, x30, [sp, #-240]!
     mov x29, sp
     stp x0, x1, [sp, #16]
     stp x2, x3, [sp, #32]
@@ -62,7 +75,9 @@ hle_note_kept:
     stp q4, q5, [sp, #160]
     stp q6, q7, [sp, #192]
     mov x0, x17
+    str x17, [sp, #224]
     bl _runtime_hle_note
+    ldr x17, [sp, #224]
     ldp q6, q7, [sp, #192]
     ldp q4, q5, [sp, #160]
     ldp q2, q3, [sp, #128]
@@ -72,8 +87,68 @@ hle_note_kept:
     ldp x4, x5, [sp, #48]
     ldp x2, x3, [sp, #32]
     ldp x0, x1, [sp, #16]
-    ldp x29, x30, [sp], #224
+    ldp x29, x30, [sp], #240
     ret
+
+
+#ifdef MNG_LITEP_RUNTIME
+// Called on host stack only. x17 is an existing imported-wrapper identity.
+// The fast disabled path preserves the original tail call and all arguments.
+    .globl _runtime_hle_profile_call
+    .p2align 2
+_runtime_hle_profile_call:
+    adrp x13, _mng_profile_hle_active@PAGE
+    add x13, x13, _mng_profile_hle_active@PAGEOFF
+    ldar w13, [x13]
+    cbnz w13, 5f
+    br x16
+5:  stp x29, x30, [sp, #-240]!
+    mov x29, sp
+    stp x0, x1, [sp, #16]
+    stp x2, x3, [sp, #32]
+    stp x4, x5, [sp, #48]
+    stp x6, x7, [sp, #64]
+    stp x8, x16, [sp, #80]
+    stp q0, q1, [sp, #96]
+    stp q2, q3, [sp, #128]
+    stp q4, q5, [sp, #160]
+    stp q6, q7, [sp, #192]
+    mov x0, x17
+    bl _runtime_hle_profile_begin
+    str x0, [sp, #224]
+    ldp q6, q7, [sp, #192]
+    ldp q4, q5, [sp, #160]
+    ldp q2, q3, [sp, #128]
+    ldp q0, q1, [sp, #96]
+    ldp x8, x16, [sp, #80]
+    ldp x6, x7, [sp, #64]
+    ldp x4, x5, [sp, #48]
+    ldp x2, x3, [sp, #32]
+    ldp x0, x1, [sp, #16]
+    blr x16
+    stp x0, x1, [sp, #16]
+    stp x2, x3, [sp, #32]
+    stp x4, x5, [sp, #48]
+    stp x6, x7, [sp, #64]
+    stp x8, x16, [sp, #80]
+    stp q0, q1, [sp, #96]
+    stp q2, q3, [sp, #128]
+    stp q4, q5, [sp, #160]
+    stp q6, q7, [sp, #192]
+    ldr x0, [sp, #224]
+    bl _mng_profile_end
+    ldp q6, q7, [sp, #192]
+    ldp q4, q5, [sp, #160]
+    ldp q2, q3, [sp, #128]
+    ldp q0, q1, [sp, #96]
+    ldp x8, x16, [sp, #80]
+    ldp x6, x7, [sp, #64]
+    ldp x4, x5, [sp, #48]
+    ldp x2, x3, [sp, #32]
+    ldp x0, x1, [sp, #16]
+    ldp x29, x30, [sp], #240
+    ret
+#endif
 
 /* x17 = wrapper index: x16 = _runtime_hle_targets[x17], then the switch. */
     .p2align 2

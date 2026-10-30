@@ -21,6 +21,12 @@
 #include "runtime_tables.h"
 #include "game_patches.h"
 #include "game_version.h"
+#if defined(MNG_PORT_HOST) && defined(GAME_BOTW160) && !TARGET_OS_IPHONE
+#include "guest_tags.h"
+#define MNG_NATIVE_GUEST_TAGS 1
+static Module *tag_module;
+static size_t tag_code_offset;
+#endif
 #define NM (sizeof(modules)/sizeof(modules[0]))
 pthread_key_t runtime_keys[8];
 static uint64_t timer_calls, svc_calls;
@@ -207,6 +213,11 @@ static void map_module(Module *m,const char *dir) {
  /* The main module gets one private, writable page after its rewritten image. The
     real-time frame-step patch reads its two floats from this page via ADRP. */
  m->size=page_up(m->file_size)+(!strcmp(m->name,"main")?0x4000:0);
+#ifdef MNG_NATIVE_GUEST_TAGS
+ if(!strcmp(m->name,"main") && mng_guest_tags_requested()){
+  tag_module=m;tag_code_offset=m->size;m->size+=0x4000;
+ }
+#endif
  m->base=mmap(NULL,m->size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
  need(m->base!=MAP_FAILED,"map module");need(fread(m->base,1,m->file_size,f)==m->file_size,"read image");fclose(f);
  unsigned char digest[32];CC_SHA256(m->base,(CC_LONG)m->file_size,digest);char hex[65];
@@ -285,6 +296,9 @@ static void seal(Module *m) {
  size_t patch_end=page_up(m->file_size);
  need(mprotect(m->base+m->patch_off,patch_end-m->patch_off,PROT_READ|PROT_EXEC)==0,"patch RX");
  sys_icache_invalidate(m->base,rx);sys_icache_invalidate(m->base+m->patch_off,patch_end-m->patch_off);
+#ifdef MNG_NATIVE_GUEST_TAGS
+ if(m==tag_module){need(mprotect(m->base+tag_code_offset,0x4000,PROT_READ|PROT_EXEC)==0,"guest tags RX");sys_icache_invalidate(m->base+tag_code_offset,0x4000);}
+#endif
 }
 static void check_permissions(Module *m) {
  mach_vm_address_t a=(uintptr_t)m->base,end=a+m->size;
@@ -297,6 +311,9 @@ static void check_permissions(Module *m) {
   vm_prot_t expected=off>=page_up(m->file_size)?(VM_PROT_READ|VM_PROT_WRITE):
    (off<page_up(m->text_end)||off>=m->patch_off)?(VM_PROT_READ|VM_PROT_EXECUTE):
    ((off>=page_up(m->text_end)&&off<(m->data_off&~0x3fffULL))||off==m->key_off)?VM_PROT_READ:(VM_PROT_READ|VM_PROT_WRITE);
+#ifdef MNG_NATIVE_GUEST_TAGS
+  if(m==tag_module && off>=tag_code_offset)expected=VM_PROT_READ|VM_PROT_EXECUTE;
+#endif
   need(info.protection==expected,"module permission mismatch");a+=size;
  }
 }
@@ -556,6 +573,10 @@ static void abort_report(int num) {
 }
 int main(int argc,char **argv) {
  need(argc==3,"usage: totk-native rewritten-dir probe|boot");
+#ifdef MNG_PORT_HOST
+ extern void mng_macos_initialize(const char*);
+ mng_macos_initialize(MNG_HOST_BACKEND);
+#endif
  /* One game or GPU probe at a time (memory, GPU time): wait for the slot before anything is loaded. */
  if(!strcmp(argv[2],"boot")||!strncmp(argv[2],"probe-gpu",9))runtime_game_slot_acquire(argv[2]);
  if(strcmp(argv[2],"boot"))setenv("TOTK_PROBE_GPU","1",1);   /* standalone probes submit GPU work; the game does not unless TOTK_GPU_ALLOW_SUBMIT=1 */
@@ -573,9 +594,20 @@ int main(int argc,char **argv) {
  if(!strcmp(argv[2],"export-ios")){const char *out=getenv("TOTK_EXPORT_IOS");need(out!=NULL,"export-ios needs TOTK_EXPORT_IOS=<dir>");export_ios_text(argv[1],out);return 0;}
 #endif
  verify_identity(!strcmp(argv[2],"probe-identity-negative"));
+#ifdef MNG_NATIVE_GUEST_TAGS
+ if(tag_module){
+  int tags_ok=mng_guest_tags_install(tag_module->base,tag_module->file_size,tag_code_offset,tag_module->size,
+      tag_module->build_id,tag_module->source_sha256,runtime_hle_wrap_profile_marker,runtime_thread_current_handle);
+  need(tags_ok,mng_guest_tags_error());
+  fprintf(stderr,"[botw] guest performance tags: 12 guarded sites page=%zx active=0\n",tag_code_offset);
+ }
+#endif
  for(unsigned i=0;i<NM;i++){seal(&modules[i]);check_permissions(&modules[i]);}
 #if defined(GAME_BOTW160) && !TARGET_OS_IPHONE
  port_debug_publish();
+#ifdef MNG_PORT_HOST
+ extern void mng_macos_modules_ready(void);mng_macos_modules_ready();
+#endif
 #endif
  if(!strcmp(argv[2],"probe-gpu-writeback")||!strcmp(argv[2],"probe-gpu-sampler-border")||!strcmp(argv[2],"probe-gpu-pool-retire")||!strcmp(argv[2],"probe-gpu-tex-slots")||!strcmp(argv[2],"probe-gpu-arg-epoch")||!strcmp(argv[2],"probe-gpu-anomaly")||!strcmp(argv[2],"probe-gpu-vertex-streams")||!strcmp(argv[2],"probe-gpu-layer-merge")||!strcmp(argv[2],"probe-gpu-cube-merge")||!strcmp(argv[2],"probe-gpu-texture-retire")||!strcmp(argv[2],"probe-gpu-texels-region")||!strcmp(argv[2],"probe-gpu-linear-rt")||!strcmp(argv[2],"probe-gpu-storage-view")||!strcmp(argv[2],"probe-gpu-compressed-alias")||!strcmp(argv[2],"probe-gpu-upload-batch")||!strcmp(argv[2],"probe-gpu-ds-clear")||!strcmp(argv[2],"probe-gpu-ub-rename")||!strcmp(argv[2],"probe-gpu-ubo-snapshot")||!strcmp(argv[2],"probe-gpu-drv-c0")||!strcmp(argv[2],"probe-gpu-dispatch-chain")||!strcmp(argv[2],"probe-gpu-copy-alias")||!strcmp(argv[2],"probe-gpu-srgb-view")||!strcmp(argv[2],"probe-gpu-depth-output"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-memory"))runtime_memory_probe();else if(!strcmp(argv[2],"probe-gfx"))runtime_gfx_probe(0);else if(!strcmp(argv[2],"probe-vpool"))runtime_vpool_probe();else if(!strcmp(argv[2],"probe-gpu-widen")||!strcmp(argv[2],"probe-gpu-blockrt")||!strcmp(argv[2],"probe-gpu-midclear")||!strcmp(argv[2],"probe-gpu-winding")||!strcmp(argv[2],"probe-gpu-tile"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-audio"))runtime_audio_probe();else if(!strcmp(argv[2],"probe-gfx-negative"))runtime_gfx_probe(1);else if(!strcmp(argv[2],"probe"))probe();else if(!strcmp(argv[2],"probe-fs"))runtime_fs_probe();else if(!strcmp(argv[2],"probe-swkbd"))runtime_swkbd_probe();else if(!strcmp(argv[2],"probe-save"))runtime_save_probe();else if(!strcmp(argv[2],"boot")){if(getenv("TOTK_VERIFY_STARTUP")||getenv("TOTK_HEADLESS"))boot();else runtime_front_run(boot);}else runtime_fail("unknown mode");return 0;
 }

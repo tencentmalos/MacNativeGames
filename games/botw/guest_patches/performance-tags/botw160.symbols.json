@@ -1,0 +1,521 @@
+{
+  "schema": "spatial.guest-symbol-shard.v2",
+  "target_id": "botw160-main",
+  "domain": "botw-framework",
+  "symbols": [
+    {
+      "module": "main",
+      "module_offset": "0xe3a2f0",
+      "segment": "text",
+      "name": "botw_RootTaskCalc",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "Exact v160 RootTask::calc profiler strings, initialization state machine and System calculation tree; calibration/main-loop.md; steady-state internal subsections not yet resolved",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 34324,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x1505460",
+      "segment": "text",
+      "name": "gsys_SystemTask_preCalc_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "PreCalc delegate registered by gsys_SystemTask_ctor main+0x18045f0; sole section string \"gsys::SystemTask::preCalc_\"; first word STP X28,X27,[SP,#-0x60]! passes the trampoline gate; 2026-10-27 exact source ELF disassembly (imagebase 0) and Android rewrite agree on first 16 bytes; old hardcoded CSV fingerprint rejected",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 5660,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x1506a80",
+      "segment": "text",
+      "name": "gsys_SystemTask_postCalc_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "PostCalc delegate; sections CalcFrame/CalcModel/CalcModelQueue/SortQueue/CalcWorld/CalcView/CalcDL/CalcCommand = v150 postCalc_ measureBeginSystem set; pushJobQueue(\"SystemTask::calcFrame\") at 0x1506bfc; runtime: mods/botw-main-frame-profiler-v160 entry/return pair executed under Vulkan (450 zones); reviewed mapping names it invokeCalcFrame_ (see v150-correlation.md); 2026-10-27 exact source ELF disassembly (imagebase 0) and Android rewrite agree on first 16 bytes; old hardcoded CSV fingerprint rejected; exact 0x1506bfc pushJobQueue, 0x1506c38 invokeCalcFrame, 0x1506c4c run, 0x1506c54 sync verified again",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 5356,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x1507f70",
+      "segment": "text",
+      "name": "gsys_SystemTask_drawTV_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "DrawTV delegate (ctor slot after PostCalc); sections Draw(TV)/FFLDraw/Draw(invokeDrawTV); sub_8150E640 called twice = the two updateGPU_ callsites of v150 drawTV; first word LDR W8,[X0,#0x554] passes the trampoline gate; IDA bounds extend to 0x1509fe4 past the sole RET 0x15083c8 (merged body, not modelled); 2026-10-27 exact source ELF disassembly (imagebase 0) and Android rewrite agree on first 16 bytes; old hardcoded CSV fingerprint rejected; exact Draw(TV) and Draw(invokeDrawTV) strings verified again; calls updateGPU at 0x1508140",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 8308,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x1509ff0",
+      "segment": "text",
+      "name": "gsys_SystemTask_drawDRC_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "DrawDRC delegate (ctor 0x1804f1c); sections Draw(DRC)/FFLDraw/Draw(invokeDrawDRC) mirror drawTV_; same callees; first word LDR W8,[X0,#0x554] passes the trampoline gate; no second display on Switch, expected to early-out at runtime (unproved)",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 848,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x150a340",
+      "segment": "text",
+      "name": "gsys_SystemTask_postDrawTV_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "ctor 0x1804f60; single section PostDraw(TV); calls 0x1d3f540, 0x12b4a50, 0x127e7d0; first word SUB SP,SP,#0x1F0 passes the trampoline gate",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 372,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x150a4c0",
+      "segment": "text",
+      "name": "gsys_SystemTask_postDrawDRC_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "ctor 0x1804fa4; single section PostDraw(DRC); same shape as PostDrawTV",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 372,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x139ff60",
+      "segment": "text",
+      "name": "sead_WorkerMgr_pushJobQueue_named",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "4 sites in postCalc_ (0x1506bfc with X1=\"SystemTask::calcFrame\", X2=this+0x5C8; 0x1507c9c/0x1507d34/0x1507dac in CalcDL); v150 postCalc_ has 4 pushJobQueue sites; decomp source lib/sead/modules/src/mc/seadWorkerMgr.cpp (status O)",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 492,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          },
+          {
+            "name": "name",
+            "type": "const char *",
+            "location": "x1",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          },
+          {
+            "name": "queue",
+            "type": "void *",
+            "location": "x2",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          },
+          {
+            "name": "core_mask",
+            "type": "uint64_t",
+            "location": "x3",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          },
+          {
+            "name": "sync_type",
+            "type": "uint32_t",
+            "location": "w4",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          },
+          {
+            "name": "push_type",
+            "type": "uint32_t",
+            "location": "w5",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x13a0150",
+      "segment": "text",
+      "name": "sead_WorkerMgr_run",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "7 sites, always immediately followed by sub_813A43D0 on the same X0 (=[this+0x580] when flag bit2); v150 postCalc_ has 7 run/sync pairs",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 636,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x13a03d0",
+      "segment": "text",
+      "name": "sead_WorkerMgr_sync",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "7 sites paired after run; prologue reads [X0+0x9C] flag",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 336,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x150a940",
+      "segment": "text",
+      "name": "gsys_SystemTask_invokeCalcFrame_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "called at 0x1506c38 in the no-worker branch (CBZ X21) exactly where v150 postCalc_ calls invokeCalcFrame_ directly (0x80c681f8); body strings ResourceEditor::calc / Renderer::calc / agl::RenderDisplay(color|depth) / DebugPrimitiveMgr = v150 invokeCalcFrame_ callees; 12208B, 3017 instructions, NOT a leaf",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 12208,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "main",
+      "module_offset": "0x150a640",
+      "segment": "text",
+      "name": "gsys_SystemTask_updateGPU_",
+      "kind": "function",
+      "mode": "aarch64",
+      "confidence": "correlated",
+      "evidence": [
+        "2 sites 0x1508140 / 0x1508300 inside Draw(TV) = the two updateGPU_ callsites of v150 drawTV; 764B",
+        "unexported: exact manifest MOD0 dynsym range query"
+      ],
+      "size": 764,
+      "provenance": [
+        "Exact BOTW 1.6.0 main NSO SHA-256 15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+        "Analysis ELF f68c09942d59e7ec72ea3761961b906dd7aead8a70fddd1c992a710eee4e178a; module-relative base 0",
+        "Citron private botw-main-loop/v1/calibration; imports.csv SHA-256 eb204eaba16a1d988a58f9b91f50857b1bcadd814acb964ee77270aee7d6cf55"
+      ],
+      "prototype": {
+        "return_type": "void",
+        "calling_convention": "AAPCS64",
+        "confidence": "correlated",
+        "evidence": [
+          "Entry body and caller register data flow; register-only member function, no stack arguments; original body forwarded unchanged"
+        ],
+        "variadic": false,
+        "parameters": [
+          {
+            "name": "self",
+            "type": "void *",
+            "location": "x0",
+            "confidence": "correlated",
+            "evidence": [
+              "Static register use/callsite; concrete class layout intentionally opaque"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

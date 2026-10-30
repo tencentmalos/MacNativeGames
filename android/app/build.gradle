@@ -1,11 +1,19 @@
 plugins { id 'com.android.application' }
 def foundation = providers.gradleProperty('foundationDir').get()
+def imgui = providers.gradleProperty('imguiDir').get()
+def freetype = providers.gradleProperty('freetypeDir').get()
 def oboe = providers.gradleProperty('oboeDir').get()
 def d2r = providers.gradleProperty('d2rDir').get()
+def volk = providers.gradleProperty('volkDir').get()
+def adrenotools = providers.gradleProperty('adrenotoolsDir').get()
+def turnipDir = providers.gradleProperty('turnipDir').get()
+def launchArtworkDir = providers.gradleProperty('launchArtworkDir').orElse('').get()
+def botwAssets = providers.gradleProperty('botwAssetConfigDir').orElse('').get()
 android {
     namespace 'org.macnative.android'
+    packaging { jniLibs { useLegacyPackaging = true } }
     compileSdk 36
-    buildFeatures { resValues true }
+    buildFeatures { resValues true; buildConfig true }
     ndkVersion '29.0.14206865'
     defaultConfig {
         applicationId 'org.macnative.android'
@@ -16,17 +24,18 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk { abiFilters 'arm64-v8a' }
         externalNativeBuild { cmake {
-            arguments "-DFOUNDATION_SOURCE_DIR=${foundation}", "-DOBOE_SOURCE_DIR=${oboe}", "-DD2R_SOURCE_DIR=${d2r}"
-            targets 'macnative_platform'
+            arguments "-DANDROID_STL=c++_shared", "-DFOUNDATION_SOURCE_DIR=${foundation}", "-DOBOE_SOURCE_DIR=${oboe}", "-DFREETYPE_SOURCE_DIR=${freetype}", "-DIMGUI_SOURCE_DIR=${imgui}", "-DD2R_SOURCE_DIR=${d2r}", "-DVOLK_SOURCE_DIR=${volk}", "-DADRENOTOOLS_SOURCE_DIR=${adrenotools}"
+            if (botwAssets) arguments "-DMNG_BOTW_ASSET_CONFIG_DIR=${botwAssets}"
+            targets 'macnative_platform', 'main_hook', 'file_redirect_hook', 'gsl_alloc_hook', 'hook_impl'
         } }
     }
     flavorDimensions 'title'
     productFlavors {
         botw {
             dimension 'title'; applicationIdSuffix '.botw'
-            versionCode 4
-            versionName '0.4-memory-vulkan'
-            resValue 'string','app_name','BOTW Android Preview'
+            versionCode 7
+            versionName '0.7-overlay'
+            resValue 'string','app_name','BOTW · 旷野之息'
             resValue 'string','title_profile','botw160'
             resValue 'string','game_version','BOTW 1.6.0'
         }
@@ -45,4 +54,55 @@ android.sourceSets.main.kotlin.srcDir("${foundation}/modules/input/android/src/m
 dependencies {
     androidTestImplementation "androidx.test:runner:1.6.2"
     androidTestImplementation "junit:junit:4.13.2"
+}
+
+// Public artwork is supplied by the local EmuPSP cache at build time. No
+// online-content dependency, account state or game payload is imported.
+def launchResources = layout.buildDirectory.dir('generated/launchRes')
+def driverAssets = layout.buildDirectory.dir('generated/driverAssets')
+def prepareLaunchResources = tasks.register('prepareLaunchResources') {
+    inputs.property('artworkDirectory', launchArtworkDir)
+    if (launchArtworkDir) inputs.dir(launchArtworkDir)
+    outputs.dir(launchResources)
+    doLast {
+        def out = launchResources.get().dir('drawable-nodpi').asFile
+        out.mkdirs()
+        ['background', 'icon'].each { kind ->
+            def source = launchArtworkDir ? new File(launchArtworkDir, "01007EF00011E000-${kind}.jpg") : null
+            def image = new File(out, "botw_${kind}.jpg")
+            def fallback = new File(out, "botw_${kind}.xml")
+            if (source?.isFile()) { fallback.delete(); image.bytes = source.bytes }
+            else {
+                image.delete()
+                fallback.text = '<shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#16332D"/><corners android:radius="16dp"/></shape>'
+            }
+        }
+    }
+}
+def prepareDriverAssets = tasks.register('prepareDriverAssets') {
+    inputs.file(new File(turnipDir, 'vulkan.ad07xx.so'))
+    inputs.file('../turnip-lock.json')
+    outputs.dir(driverAssets)
+    doLast {
+        def lock = new groovy.json.JsonSlurper().parse(file('../turnip-lock.json'))
+        if (lock.cxx_runtime != 'static-hidden' || !lock.needed || lock.needed.any { it =~ /lib(c\+\+|stdc\+\+|c\+\+abi|unwind)/ })
+            throw new GradleException('Turnip lock must identify a driver without dynamic C++ runtime dependencies')
+        def source = new File(turnipDir, 'vulkan.ad07xx.so')
+        def hash = java.security.MessageDigest.getInstance('SHA-256')
+        source.withInputStream { stream -> byte[] block = new byte[65536]; int count
+            while ((count = stream.read(block)) != -1) hash.update(block, 0, count)
+        }
+        if (hash.digest().encodeHex().toString() != lock.library_sha256)
+            throw new GradleException('Turnip does not match turnip-lock.json')
+        def out = driverAssets.get().dir('turnip').asFile; out.mkdirs()
+        new File(out, 'vulkan.ad07xx.so').bytes = source.bytes
+        new File(out, 'identity.json').bytes = file('../turnip-lock.json').bytes
+    }
+}
+android.sourceSets.botw.res.srcDir(launchResources.get().asFile)
+android.sourceSets.botw.assets.srcDir(driverAssets.get().asFile)
+tasks.configureEach { task ->
+    if (task.name.startsWith('preBotw') && task.name.endsWith('Build')) task.dependsOn(prepareLaunchResources, prepareDriverAssets)
+    if (task.name.startsWith('mergeBotw') && task.name.endsWith('Resources')) task.dependsOn(prepareLaunchResources)
+    if (task.name.startsWith('mergeBotw') && task.name.endsWith('Assets')) task.dependsOn(prepareDriverAssets)
 }

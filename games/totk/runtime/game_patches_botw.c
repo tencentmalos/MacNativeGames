@@ -178,6 +178,15 @@ void runtime_frame_step_update(uint64_t now_ns) {
     frame_step_measure(now_ns);
     if (pad_tick) pad_tick_advance();
 }
+#ifdef MNG_PORT_HOST
+int runtime_frame_step_sample(double *seconds) {
+    if (!frame_step_data) return 0;
+    uint32_t bits = atomic_load_explicit(frame_step_data, memory_order_acquire) >> 32;
+    float value; memcpy(&value, &bits, sizeof value);
+    if (seconds) *seconds = value;
+    return 1;
+}
+#endif
 static uint32_t adrp_reg(unsigned rd, uint64_t site, uint64_t target) {
     int64_t pages = (int64_t)(target >> 12) - (int64_t)(site >> 12);
     if (pages < -(1 << 20) || pages >= (1 << 20)) runtime_fail("real-time frame-step data outside ADRP range");

@@ -36,6 +36,7 @@ class GuestMemory {
     // Register loader-owned mappings. They remain owned by the caller and
     // cannot be changed by this class's heap/physical-memory operations.
     void register_mapping(uint64_t base, uint64_t size, uint32_t state, uint32_t permission);
+    void unregister_mapping(uint64_t base, uint64_t size);
     MemoryInfo query(uint64_t address) const;
     bool accessible(uint64_t address, uint64_t size, uint32_t permission) const;
     std::optional<uint64_t> info(uint32_t id) const;

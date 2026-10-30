@@ -186,6 +186,9 @@ static NSString *pad_type_text(void){
  return @(TOTK_UI("自动（未接手柄）","auto (no controller)"));
 }
 static NSString *shortcut_text(void){
+#ifdef MNG_BACKEND_VULKAN
+ return [NSString stringWithFormat:@(TOTK_UI("Vulkan / MoltenVK\n1  提示\n4  画面比例\n6  手柄类型：%@\n7  鼠标操作\nMetalFX 补帧与平滑暂不可用","Vulkan / MoltenVK\n1  Overlays\n4  Aspect ratio\n6  Controller: %@\n7  Mouse\nMetalFX interpolation and AA unavailable")),pad_type_text()];
+#else
  const char *interp;
  switch(mfx_enabled()){
   case MFX_30:interp="30+30";break;
@@ -207,6 +210,7 @@ static NSString *shortcut_text(void){
  return [NSString stringWithFormat:@(TOTK_UI("快捷键说明\n1  提示：全部 → 只显示 FPS → 隐藏\n2  补帧：当前 %@（按键切换）\n3  画质：当前 %@（按键切换）\n4  画面比例：当前 %@（按键切换）\n5  边缘平滑（MetalFX 时间性）：%@\n6  手柄类型：当前 %@（按键切换）\n7  鼠标操作：当前 %@（按键切换）","Shortcuts\n1  Overlays: all → FPS only → off\n2  Interpolation: %@ (current; press to cycle)\n3  Picture: %@ (current; press to cycle)\n4  Aspect ratio: %@ (current; press to cycle)\n5  Edge smoothing (MetalFX Temporal): %@\n6  Controller type: %@ (current; press to cycle)\n7  Mouse: %@ (current; press to switch)")),[NSString stringWithUTF8String:interp],picture,shape,
   taa_enabled()?(taa_effective()?@(TOTK_UI("开","on")):@(TOTK_UI("开（未生效）","on (not in effect)"))):@(TOTK_UI("关","off")),pad_type_text(),
   runtime_mouse_enabled()?@(TOTK_UI("开（视角、按键，⌘Tab 释放指针）","on (camera, buttons; Command-Tab frees the pointer)")):@(TOTK_UI("关","off"))];
+#endif
 }
 -(instancetype)initWithFrame:(NSRect)frame{if((self=[super initWithFrame:frame])){int compact=hud_compact();self.wantsLayer=YES;self.layer.backgroundColor=[NSColor colorWithCalibratedWhite:0.04 alpha:compact?0.72:0.86].CGColor;self.layer.cornerRadius=compact?7:14;self.layer.borderWidth=1;self.layer.borderColor=[NSColor colorWithCalibratedWhite:1 alpha:compact?0.14:0.2].CGColor;
  self.label=[NSTextField labelWithString:shortcut_text()];self.label.font=[NSFont systemFontOfSize:17 weight:NSFontWeightMedium];self.label.textColor=NSColor.whiteColor;self.label.alignment=NSTextAlignmentCenter;self.label.maximumNumberOfLines=0;self.label.lineBreakMode=NSLineBreakByWordWrapping;self.label.frame=NSInsetRect(self.bounds,20,18);self.label.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;[self addSubview:self.label];

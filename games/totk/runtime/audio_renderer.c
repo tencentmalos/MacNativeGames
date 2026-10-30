@@ -13,8 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if !defined(__ANDROID__)
 #include <mach/mach.h>
 #include <pthread/qos.h>
+#endif
 
 #define REV(n) (0x30564552u + ((uint32_t)(n) << 24))   /* "REVn" */
 #define WORK_BUFFER_BYTES 0x10000u                      /* host keeps its state in host memory */
@@ -255,7 +257,9 @@ static void advance_voice(AudioRenderer *r, ServerVoice *v, double out_seconds) 
 }
 static void *render_thread(void *p) {
     AudioRenderer *r = p;
+#if !defined(__ANDROID__)
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);
+#endif
     const double frame = (double)r->param.sample_count / r->param.sample_rate;
     struct timespec next; clock_gettime(CLOCK_MONOTONIC, &next);
     while (__atomic_load_n(&r->running, __ATOMIC_ACQUIRE)) {
@@ -300,11 +304,13 @@ static void renderer_handler(IpcSession *s, const IpcRequest *rq, IpcResponse *r
         IpcBuffer out = pick(rq->b, rq->nb, rq->c, rq->nc, 0), perf = pick(rq->b, rq->nb, rq->c, rq->nc, 1);
         if (!r->logged) fprintf(stderr, "[totk-audio] RequestUpdate cmd %u in=%#llx+%#llx out=%#llx+%#llx perf=%#llx+%#llx (a%u b%u x%u c%u)\n", rq->cmd,
             (unsigned long long)in.addr, (unsigned long long)in.size, (unsigned long long)out.addr, (unsigned long long)out.size, (unsigned long long)perf.addr, (unsigned long long)perf.size, rq->na, rq->nb, rq->nx, rq->nc);
+#if !defined(__ANDROID__)
         if (getenv("TOTK_AUDIO_PROBE") && in.addr < (1ull << 32)) {
             for (uint64_t hi = 0; hi < 0x100; hi++) { uint64_t a = (hi << 32) | in.addr; vm_size_t n = 0; uint32_t w = 0;
                 if (vm_read_overwrite(mach_task_self(), a, 4, (vm_address_t)&w, &n) == KERN_SUCCESS && (w & 0xffffff) == 0x564552) fprintf(stderr, "[totk-audio] probe: header at %#llx\n", (unsigned long long)a); }
             runtime_fail("probe done");
         }
+ #endif
         need(in.size && out.size, "RequestUpdate buffers");
         request_update(r, ipc_guest(in.addr, in.size), in.size, ipc_guest(out.addr, out.size), out.size, perf.size);
         for (unsigned i = 0; i < rq->nc && rq->cmd == 10; i++) if (rq->c[i].size && (i >= rq->nb || !rq->b[i].size)) rs->xout[rs->nxout++] = (IpcBuffer){rq->c[i].addr, rq->c[i].size, i};

@@ -162,6 +162,11 @@ static void service_start(rt_svc *svc) {
     if (svc->in) return;
     pthread_mutex_lock(&g_svc_start_lock);
     NSString *r = root_dir();
+    NSString *tools = [r stringByAppendingPathComponent:@"build"];
+#ifdef MNG_PORT_HOST
+    const char *assets = getenv("MNG_METAL_ASSETS_DIR");
+    if (assets && *assets) tools = @(assets);
+#endif
     int to[2], from[2];
     if (pipe(to) || pipe(from)) die("shader service pipes");
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
@@ -171,12 +176,12 @@ static void service_start(rt_svc *svc) {
        others. The .NET translator then never learns that its spirv-cross child exited and waits forever (2026-10-21). */
     posix_spawnattr_t sa; posix_spawnattr_init(&sa); sigset_t none; sigemptyset(&none); posix_spawnattr_setsigmask(&sa, &none);
     posix_spawnattr_setflags(&sa, POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK);
-    NSString *sc = [r stringByAppendingString:@"/build/spirv-cross/spirv-cross"];
+    NSString *sc = [tools stringByAppendingPathComponent:@"spirv-cross/spirv-cross"];
     // TOTK_SHADER_XLATE=<totk_xlate.dll> runs a trial translator build (e.g. build/totk_xlate-opt) without replacing the
     // shared one (through shader_service.py); TOTK_SHADER_DEBUGMODE=0|1 reaches either service through the environment.
     // TOTK_SHADER_SERVICE=python | native picks the service (default: native when build/shader-service/totk_xlate is there).
     const char *xe = getenv("TOTK_SHADER_XLATE"), *want = getenv("TOTK_SHADER_SERVICE"), *dm = getenv("TOTK_SHADER_DEBUGMODE");
-    NSString *native = [r stringByAppendingString:@"/build/shader-service/totk_xlate"];
+    NSString *native = [tools stringByAppendingPathComponent:@"shader-service/totk_xlate"];
     int have_native = access(native.fileSystemRepresentation, X_OK) == 0;
     int use_native = have_native && !(xe && *xe) && !(want && !strcmp(want, "python"));
     if (want && !strcmp(want, "native") && !use_native) die("TOTK_SHADER_SERVICE=native but %s is not there (make shader-service)", native.UTF8String);

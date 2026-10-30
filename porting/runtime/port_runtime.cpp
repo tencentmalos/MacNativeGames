@@ -47,6 +47,7 @@ std::string debug_payload;
 void begin_update() {++mng_port_debug_descriptor.sequence;std::atomic_thread_fence(std::memory_order_seq_cst);}
 void end_update() {std::atomic_thread_fence(std::memory_order_seq_cst);++mng_port_debug_descriptor.sequence;}
 }
+std::string debug_snapshot() {std::lock_guard lock(debug_mutex);return debug_payload;}
 std::string sha256(std::span<const uint8_t> bytes) {
     mng_port_sha256_CTX ctx;mng_port_sha256_Init(&ctx);
     while(!bytes.empty()) {

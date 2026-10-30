@@ -17,6 +17,7 @@
 enum { AL_OFF, AL_WAIT, AL_PRESSING, AL_DONE };
 enum { KEY_A = 38, PRESS_MS = 150, POLL_MS = 50 };
 static _Atomic int g_state = AL_OFF;
+static _Atomic int g_reason; /* 1: save opened, 2: user input, 3: timeout */
 static unsigned g_period_ms = 1500, g_limit_s = 180;
 
 static unsigned env_uint(const char *name, unsigned def, unsigned lo, unsigned hi) {
@@ -25,7 +26,8 @@ static unsigned env_uint(const char *name, unsigned def, unsigned lo, unsigned h
     if (end == e || *end || v < lo || v > hi) { fprintf(stderr, "[autoload] %s=%s: expected %u..%u\n", name, e, lo, hi); runtime_fail("invalid auto-load setting"); }
     return (unsigned)v;
 }
-__attribute__((constructor)) static void autoload_configure(void) {
+void runtime_autoload_configure(void) {
+    if (atomic_load(&g_state) != AL_OFF) return;
     const char *e = getenv("TOTK_AUTOLOAD");
     if (!e || !strcmp(e, "0")) return;
     if (strcmp(e, "1")) runtime_fail("TOTK_AUTOLOAD takes 0 or 1");
@@ -35,15 +37,23 @@ __attribute__((constructor)) static void autoload_configure(void) {
     atomic_store(&g_state, AL_WAIT);
     fprintf(stderr, "[autoload] on: the newest save is loaded once the game finds one (any key you press takes over)\n");
 }
+__attribute__((constructor)) static void autoload_configure(void) { runtime_autoload_configure(); }
+int runtime_autoload_snapshot(char *out, unsigned bytes) {
+    static const char *names[] = {"off", "waiting_for_save", "pressing", "done"};
+    return snprintf(out,bytes,"schema=mng.autoload.v1\nstate=%s\nstop_reason=%d\n",
+                    names[atomic_load(&g_state)],atomic_load(&g_reason));
+}
 
-static void stop(int from, const char *why) {
-    if (atomic_compare_exchange_strong(&g_state, &from, AL_DONE)) fprintf(stderr, "[autoload] %s\n", why);
+static void stop(int from, int reason, const char *why) {
+    if (atomic_compare_exchange_strong(&g_state, &from, AL_DONE)) {
+        atomic_store(&g_reason,reason);fprintf(stderr, "[autoload] %s\n", why);
+    }
 }
 static void *press_loop(void *arg) {
     (void)arg;
     uint64_t t0 = runtime_now_ns();
     for (unsigned n = 1; atomic_load(&g_state) == AL_PRESSING; n++) {
-        if (runtime_now_ns() - t0 >= (uint64_t)g_limit_s * 1000000000ull) { stop(AL_PRESSING, "gave up: the load did not start (no progress.sav opened)"); break; }
+        if (runtime_now_ns() - t0 >= (uint64_t)g_limit_s * 1000000000ull) { stop(AL_PRESSING, 3, "gave up: the load did not start (no progress.sav opened)"); break; }
         runtime_input_key_synthetic(KEY_A, 1); usleep(PRESS_MS * 1000); runtime_input_key_synthetic(KEY_A, 0);
         fprintf(stderr, "[autoload] press A #%u at %.1f s\n", n, (double)(runtime_now_ns() - t0) / 1e9);
         for (unsigned w = PRESS_MS; w < g_period_ms && atomic_load(&g_state) == AL_PRESSING; w += POLL_MS) usleep(POLL_MS * 1000);
@@ -77,7 +87,7 @@ void runtime_autoload_save_file_opened(const char *path) {
     if (s == AL_OFF || s == AL_DONE) return;
     if (slot_file(path, SLOT_DATA)) {
         char why[200]; snprintf(why, sizeof why, "load started (%s opened): done", path);
-        stop(s, why);
+        stop(s, 1, why);
     } else if (s == AL_WAIT && slot_file(path, "caption.sav")) {
         int from = AL_WAIT;
         if (!atomic_compare_exchange_strong(&g_state, &from, AL_PRESSING)) return;
@@ -87,5 +97,5 @@ void runtime_autoload_save_file_opened(const char *path) {
 }
 void runtime_autoload_user_input(void) {
     int s = atomic_load(&g_state);
-    if (s == AL_WAIT || s == AL_PRESSING) stop(s, "cancelled: the user pressed a key or button");
+    if (s == AL_WAIT || s == AL_PRESSING) stop(s, 2, "cancelled: the user pressed a key or button");
 }

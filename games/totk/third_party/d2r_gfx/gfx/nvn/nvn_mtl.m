@@ -17,6 +17,7 @@
 #include <objc/runtime.h>
 #include <fcntl.h>
 #include "nvn_mtl.h"
+#include "nvn_profile.h"
 #include "nvn_obj.h"
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/nvn_deswizzle.h"
@@ -75,6 +76,14 @@ extern __thread sigjmp_buf *runtime_fault_guard;   // runtime/loader.c: a guarde
 #include "totk_serial_set.h"
 
 static void warm_start(void);
+static int native_display_sync(void) {
+#if defined(MNG_PORT_HOST) && TARGET_OS_OSX
+    const char *mode=getenv("MNG_VSYNC");
+    return !(mode && !strcmp(mode,"0"));
+#else
+    return 1;
+#endif
+}
 static void warm_claim(void);
 int mtl_warm_wait(int timeout_ms);
 extern void runtime_warm_progress(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t) __attribute__((weak_import));
@@ -529,6 +538,8 @@ void mtl_init(void) {
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // 缺省 1（真机同进程交替：负载超一拍时长帧 15% → 0、帧间隔变匀；稳 60 时与 0 无差别）；DM_PRESENT_LINK=0 关   // 1 = 60 Hz 节拍每拍出图；2 = 120 Hz 节拍、游戏隔拍出一帧（落后时下一个 8.33 ms 拍就能上屏） | Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
     const char *latency = getenv("DM_PRESENT_LATENCY");
+    if (!native_display_sync()) g_dm_present_link = 0;
+    MLOG("host_vsync=%d display_link=%d",native_display_sync(),g_dm_present_link);
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
     g_dev = MTLCreateSystemDefaultDevice();
@@ -4745,6 +4756,10 @@ static NSMutableDictionary<NSString *, NSString *> *g_shmap;
 static NSMutableDictionary<NSString *, NSString *> *g_shassets;
 static NSString *g_shmap_path, *g_msl_dir;
 static NSString *exe_rel(const char *rel) {
+#ifdef MNG_PORT_HOST
+    const char *assets = getenv("MNG_METAL_ASSETS_DIR");
+    if (assets && *assets) return [@(assets) stringByAppendingPathComponent:@(rel)];
+#endif
     char buf[4096]; uint32_t n = sizeof buf;
     if (_NSGetExecutablePath(buf, &n)) return nil;
     char *dir = dirname(buf);
@@ -13660,7 +13675,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     if (!layer) return 0;
     if (g_present_layer_resident != layer) { if (!layer.residencySet) MDIE("present layer has no residency set (layer device %s)", layer.device ? "set" : "missing"); [g_q4 addResidencySet:layer.residencySet]; g_present_layer_resident = layer; }
 #if TARGET_OS_OSX
-    if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // 窗口模式按显示器垂直同步，防撕裂 | Windowed mode follows the display's vsync to prevent tearing
+    layer.displaySyncEnabled = native_display_sync() != 0;
 #endif
     present_pipeline(layer.pixelFormat);   // 和原路径一样，首帧编管线在取drawable之前 | Same as the original path: the first frame compiles the pipeline before taking the drawable
     window_shot_tick(g_present_n);
@@ -13804,12 +13819,15 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // 真实呈现时刻（屏幕上真正换上这一帧的时间，CACurrentMediaTime 基准） | Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
         if (interp < 0) g_pres[pn % PRING] = (pres_ent){pn, tt > 0 ? tt : -1};   // statistics per game frame; the interpolated one is not a game frame
+#ifdef MNG_PORT_HOST
+        if (interp < 0) { extern void mng_macos_metal_present(uint64_t); mng_macos_metal_present(pn); }
+#endif
         cadence_note(tt, interp >= 0);
         front_frame_presented();
     }];
     // 每张至少显示一个出图周期：GPU 完成时刻在 120 Hz 刷新边界附近抖动时，不再出现「25 ms + 8.33 ms」成对的顿挫
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
-    if (target_ts > 0) [dr present];
+    if (!native_display_sync() || target_ts > 0) [dr present];
     else if (period > 0) [dr presentAfterMinimumDuration:period]; else [dr present];
 #endif
     (void)frame;

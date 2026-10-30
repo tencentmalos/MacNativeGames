@@ -16,7 +16,7 @@ class BotwPatchCatalog(unittest.TestCase):
         self.data = json.loads(catalog.CATALOG.read_text())
 
     def test_inventory_and_manifest_identity(self):
-        self.assertEqual(catalog.validate(self.data)['enabled_recipes'], 0)
+        self.assertEqual(catalog.validate(self.data)['enabled_recipes'], 4)
         modules = [dict(name=n, **m) for n, m in self.data['modules'].items()]
         manifest = dict(schema_version=1, title='botw160', target='android', modules=modules)
         modules[0]['build_id'] = modules[0]['build_id'].upper() + '00'

@@ -1,5 +1,7 @@
 /* Native keyboard and macOS gamepad backed full-key controller. State ABI follows libnx HID. */
+#if !defined(__ANDROID__)
 #include <TargetConditionals.h>
+#endif
 #include "runtime.h"
 #include "autoload.h"
 #include "world_survey.h"
@@ -14,6 +16,30 @@ static pthread_mutex_t inputLock=PTHREAD_MUTEX_INITIALIZER;
 static unsigned char keys[128];static uint64_t pending;
 static uint32_t styles=1;static bool enabled,allowed=true;static int holdType;
 static int64_t sample;static uint64_t padSeen;
+#ifdef MNG_LITEP_RUNTIME
+#include "../../../porting/profiler/profile_c.h"
+static unsigned pulse_direction;
+static _Atomic uint64_t pulse_until;
+static uint64_t pulse_generation;
+static uint64_t pulse_applied_generation,pulse_ended_generation;
+int runtime_input_pulse(int direction,unsigned milliseconds,char *out,unsigned bytes){
+ if(direction<0 || direction>6 || milliseconds>3000 || (direction&&!milliseconds))return -2;
+ if(pthread_mutex_trylock(&inputLock))return -1;
+ uint64_t now=runtime_now_ns();
+ if(direction){
+  if(pulse_until>now){pthread_mutex_unlock(&inputLock);return -1;}
+  pulse_direction=(unsigned)direction;pulse_until=now+(uint64_t)milliseconds*1000000;++pulse_generation;
+  mng_profile_counter("Input.Pulse.Generation",pulse_generation);
+  mng_profile_counter("Input.Pulse.Direction",direction);
+  mng_profile_counter("Input.Pulse.DurationMs",milliseconds);
+ }else if(milliseconds){pulse_until=0;pulse_direction=0;}
+ const uint64_t until=atomic_load(&pulse_until);
+ int n=snprintf(out,bytes,"schema=mng.input-pulse.v1\ngeneration=%llu\napplied_generation=%llu\nactive=%u\ndirection=%u\nremaining_ms=%llu\n",
+  (unsigned long long)pulse_generation,(unsigned long long)pulse_applied_generation,(unsigned)(until>now),pulse_direction,
+  (unsigned long long)(until>now?(until-now)/1000000:0));
+ pthread_mutex_unlock(&inputLock);return n;
+}
+#endif
 /* F/T/H/G map the D-pad left/up/right/down, keeping both analog-stick mappings independent. */
 static uint64_t button(unsigned code){switch(code){case 38:return 1;case 40:case 49:return 2;case 34:return 4;case 32:return 8;case 6:return 16;case 8:return 32;case 12:return 64;case 14:return 128;case 58:return 256;case 56:return 512;case 36:return 1024;case 48:case 53:return 2048;case 3:return 4096;case 17:return 8192;case 4:return 16384;case 5:return 32768;default:return 0;}}
 /* Real user input (a window key, a controller button, a stick pushed past half) stops TOTK_AUTOLOAD and is logged at most
@@ -21,7 +47,13 @@ static uint64_t button(unsigned code){switch(code){case 38:return 1;case 40:case
    save is a copy, its scripted measurement is void, and its script must not close the game under the user
    (2026-10-15: the user played 12 minutes in a test window and the script closed it at its time limit). */
 static void user_input(const char *what){
+#ifdef MNG_LITEP_RUNTIME
+ /* Keyboard and gamepad callbacks have different lock ownership. */
+ pulse_until=0;
+#endif
+#if !defined(__ANDROID__)
  runtime_survey_cancel_user();
+#endif
  runtime_autoload_user_input();
  static _Atomic uint64_t last;uint64_t now=runtime_now_ns(),prev=atomic_load(&last);
  if(prev&&now-prev<60000000000ull)return;if(!atomic_compare_exchange_strong(&last,&prev,now))return;
@@ -36,15 +68,24 @@ static void user_input(const char *what){
    (runtime_mouse_toggle, gamepad.m; the window holds the pointer: frontend.m). Held-key repeats do not cycle. */
 enum { KEY_INTERP_TOGGLE = 19, KEY_OUTPUT_MODE_CYCLE = 20, KEY_ASPECT_TOGGLE = 21, KEY_PAD_TYPE_CYCLE = 22, KEY_TAA_TOGGLE = 23, KEY_MOUSE_TOGGLE = 26 };   /* 21: key 4, 16:9 -> fit to the window -> 21:9 (aspect_patch.h); 22: key 6; 23: key 5, MetalFX temporal anti-aliasing (totk_taa.m) */
 void runtime_input_key_synthetic(unsigned code,int down){if(code>=128)return;pthread_mutex_lock(&inputLock);int press=down&&!keys[code];if(down&&!keys[code])pending|=button(code);keys[code]=(unsigned char)!!down;pthread_mutex_unlock(&inputLock);
+#if !defined(__ANDROID__)
  if(press&&code==18){extern void runtime_shortcut_help_toggle(void);runtime_shortcut_help_toggle();}
  if(press&&code==KEY_INTERP_TOGGLE){extern void dm_gfx_set_flag(const char *name,int v);dm_gfx_set_flag("mfx_interp",-1);}
  if(press&&code==KEY_OUTPUT_MODE_CYCLE)runtime_output_mode_cycle();
  if(press&&code==KEY_ASPECT_TOGGLE)runtime_aspect_toggle();
  if(press&&code==KEY_TAA_TOGGLE){extern void taa_toggle(void);taa_toggle();}
  if(press&&code==KEY_PAD_TYPE_CYCLE)runtime_gamepad_type_cycle();
- if(press&&code==KEY_MOUSE_TOGGLE)runtime_mouse_toggle();}
+ if(press&&code==KEY_MOUSE_TOGGLE)runtime_mouse_toggle();
+#else
+ (void)press;
+#endif
+}
 void runtime_input_key(unsigned code,int down){if(down&&code<128)user_input("keyboard");runtime_input_key_synthetic(code,down);}
-void runtime_input_clear(void){pthread_mutex_lock(&inputLock);memset(keys,0,sizeof(keys));pending=0;pthread_mutex_unlock(&inputLock);runtime_gamepad_clear();}
+void runtime_input_clear(void){pthread_mutex_lock(&inputLock);memset(keys,0,sizeof(keys));pending=0;
+#ifdef MNG_LITEP_RUNTIME
+ pulse_until=0;
+#endif
+ pthread_mutex_unlock(&inputLock);runtime_gamepad_clear();}
 static void initialize(void){pthread_mutex_lock(&inputLock);enabled=true;pthread_mutex_unlock(&inputLock);fprintf(stderr,"[totk] native keyboard controller initialized\n");}
 /* Docked: one full-key controller as player 1 (id 0, style bit 0). Handheld (TOTK_OPERATION_MODE=handheld, the iPhone):
    the same input is the handheld controller (id 0x20, style bit 1, joy-cons attached) and player 1 is not connected;
@@ -63,10 +104,19 @@ static int pad_states(NpadState *out,int max,const uint32_t *id,uint32_t want_st
 static int full_states(NpadState *out,int max,const uint32_t *id){return pad_states(out,max,id,1);}
 static int handheld_states(NpadState *out,int max,const uint32_t *id){return pad_states(out,max,id,2);}
 static int pad_states(NpadState *out,int max,const uint32_t *id,uint32_t want_style){if(max<=0)return 0;if(id)input_log(want_style==2?"handheld state":"full-key state",*id);if(!out||!id)runtime_fail("controller output pointer");pthread_mutex_lock(&inputLock);NpadState state={.sampling=++sample};if(enabled&&allowed&&*id==pad_id()&&want_style==pad_style()&&(styles&want_style)){
- state.attributes=1;for(unsigned i=0;i<128;i++)if(keys[i])state.buttons|=button(i);state.buttons|=pending;pending=0;
+ /* Handheld includes both attached Joy-Cons. Match the HID connection flags
+    used by Citron's Npad Handheld path (c907463c56c7), not just Connected. */
+ state.attributes=want_style==2?0x3f:1;for(unsigned i=0;i<128;i++)if(keys[i])state.buttons|=button(i);state.buttons|=pending;pending=0;
  state.lx=32767*((int)keys[2]-(int)keys[0]);state.ly=32767*((int)keys[13]-(int)keys[1]);state.rx=32767*((int)keys[124]-(int)keys[123]);state.ry=32767*((int)keys[126]-(int)keys[125]);
  RuntimeGamepadState pad;runtime_gamepad_read(&pad);state.buttons|=pad.buttons;
  if(pad.buttons&~padSeen||abs(pad.lx)>16384||abs(pad.ly)>16384||abs(pad.rx)>16384||abs(pad.ry)>16384)user_input("controller");padSeen=pad.buttons;
+#ifdef MNG_LITEP_RUNTIME
+ if(pulse_until>runtime_now_ns()){
+  if(pulse_applied_generation!=pulse_generation){pulse_applied_generation=pulse_generation;mng_profile_counter("Input.Pulse.Applied",pulse_generation);}
+  switch(pulse_direction){case 1:state.ly=32767;break;case 2:state.ly=-32767;break;
+   case 3:state.lx=-32767;break;case 4:state.lx=32767;break;case 5:state.rx=-32767;break;case 6:state.rx=32767;break;}
+ }else if(pulse_ended_generation!=pulse_applied_generation){pulse_ended_generation=pulse_applied_generation;mng_profile_counter("Input.Pulse.Released",pulse_ended_generation);}
+#endif
  if(abs(pad.lx)>abs(state.lx))state.lx=pad.lx;if(abs(pad.ly)>abs(state.ly))state.ly=pad.ly;
  if(abs(pad.rx)>abs(state.rx))state.rx=pad.rx;if(abs(pad.ry)>abs(state.ry))state.ry=pad.ry;
  }*out=state;pthread_mutex_unlock(&inputLock);return 1;}
@@ -150,6 +200,7 @@ __attribute__((constructor)) static void input_script_start(void) {
     pthread_t t; pthread_create(&t, NULL, input_script, (void *)e); pthread_detach(t);
 }
 
+#if !defined(__ANDROID__)
 /* Optional local integration-test command stream. Appending complete lines lets tests inspect each
    actual frame before choosing the next input, instead of guessing load/menu timings. Disabled normally.
    Commands: key <Mac keycode> <milliseconds>, down/up <Mac keycode>, shot <path>, wshot <path>, passdump <frames>, querylog <frames>, anomdump,
@@ -235,3 +286,5 @@ __attribute__((constructor)) static void input_file_start(void) {
     const char *e = getenv("TOTK_INPUT_FILE"); if (!e || !*e) return;
     pthread_t t; if (pthread_create(&t, NULL, input_file, (void *)e)) runtime_fail("diagnostic input thread"); pthread_detach(t);
 }
+
+#endif // !__ANDROID__

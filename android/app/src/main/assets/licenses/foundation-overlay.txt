@@ -1,0 +1,5 @@
+Foundation imgui_overlay, perf_metrics and shared support implementation
+Copyright (c) 2026 tencentmalos. All rights reserved.
+For study and research only. Not for redistribution.
+Source commit: 2f27d3bb41c1659d33b89905255fab2675fc0144
+This APK is a local research build, not a public binary distribution.

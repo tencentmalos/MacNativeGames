@@ -32,9 +32,14 @@ enum { STYLE_FULL_KEY = 3, STYLE_HANDHELD = 4, SIX_AXIS_CONNECTED = 1 };
 /* On unless =0 (2026-10-17: default on, the user's request). An agent's test session (TOTK_SLOT_OWNER claude / codex) leaves
    them off unless set, so a test does not rumble the user's controller and tests stay as measured before. */
 static bool env_on(const char *name) {
+#if defined(__ANDROID__)
+    // Feedback transport is not connected yet; do not advertise unavailable devices.
+    (void)name; return false;
+#else
     const char *e = getenv(name); if (e) return strcmp(e, "0") != 0;
     const char *o = getenv("TOTK_SLOT_OWNER");
     return !(o && (!strcmp(o, "claude") || !strcmp(o, "codex")));
+#endif
 }
 int runtime_rumble_enabled(void) { return env_on("TOTK_RUMBLE"); }
 int runtime_gyro_enabled(void) { return env_on("TOTK_GYRO"); }

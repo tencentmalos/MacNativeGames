@@ -19,6 +19,7 @@ extern "C" JNIEXPORT jstring JNICALL JNI(modules)(JNIEnv* e,jobject,jstring dire
     const auto report=execute?mng::probe_modules(path,profile):mng::validate_modules(path,profile);
     return e->NewStringUTF(report.c_str());
 }
+extern "C" JNIEXPORT void JNICALL JNI(configureInput)(JNIEnv*,jobject,jboolean swap_ab) {mng::input.configure(swap_ab);}
 extern "C" JNIEXPORT jlong JNICALL JNI(begin)(JNIEnv*,jobject) { return mng::input.begin(); }
 extern "C" JNIEXPORT void JNICALL JNI(end)(JNIEnv*,jobject,jlong token) { mng::input.end(token); }
 template<class T,class A> std::vector<T> array(JNIEnv* env,A a);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate BOTW migration inventory; never apply or activate a patch."""
+"""Validate BOTW patch ownership and the approved Android recipe; never apply code."""
 import argparse
 import json
 from pathlib import Path
@@ -29,7 +29,7 @@ def source(root, name):
 
 
 def validate(catalog, root=ROOT, manifest=None):
-    require(catalog['schema_version'] == 1 and catalog['kind'] == 'guest-patch-inventory', 'Unsupported inventory')
+    require(catalog['schema_version'] == 2 and catalog['kind'] == 'guest-patch-inventory', 'Unsupported inventory')
     require(catalog['profile'] == 'botw160', 'Unsupported title/version')
     require(catalog['source_manifest'] == 'games/botw/assets/expected-v1.6.0.json', 'Wrong source manifest')
     pins = json.loads(source(root, catalog['source_manifest']).read_text())
@@ -38,17 +38,44 @@ def validate(catalog, root=ROOT, manifest=None):
     for name, module in catalog['modules'].items():
         build_id(module['build_id'])
         require(module['source_sha256'] == pins['exefs_sha256'][name], 'Source identity drift')
-    require(catalog['shared_defaults'] == {'macos-arm64': [], 'android-arm64': []}, 'Inventory cannot enable patches')
+    require(catalog['shared_defaults'] == {'macos-arm64': [], 'android-arm64': ['botw160.exclusive-acquire', 'botw160.realtime-vfr', 'botw160.pad-repeat', 'botw160.movie-pacing']}, 'Unreviewed default recipe')
     entries = {p['id']: p for p in catalog['patches']}
     require(entries and len(entries) == len(catalog['patches']), 'Duplicate/empty inventory')
     for name, entry in entries.items():
         require(name.startswith('botw160.') and entry['module'] in catalog['modules'], 'Wrong patch owner')
         require(entry['category'] in ('compatibility', 'feature', 'diagnostic'), 'Unknown category')
         require(entry['effect'] in ('guest_instructions', 'guest_state', 'host_policy'), 'Unknown effect')
-        require(entry['shared_recipe'] is None, 'Executable recipes need a separate reviewed schema')
+        if name == 'botw160.exclusive-acquire':
+            recipe = entry['shared_recipe']
+            require(recipe == dict(path='games/botw/guest_patches/exclusive_acquire.cpp',
+                entrypoint='apply_exclusive_acquire', platform='android-arm64',
+                input_sha256='cf5d57a21cd85a627de7c9c500957d971b81b6aebbc3360ed78edbe350b41884',
+                output_sha256='60474b0e3056daf4aee06c875de30bb001310d934437da0c4e99bdb76ca05007',
+                text_sites=18249, rewrite_sites=63), 'Android recipe identity drift')
+            body = source(root, recipe['path']).read_text()
+            require(all(recipe[field] in body for field in ('entrypoint', 'input_sha256', 'output_sha256')),
+                    'Recipe source identity mismatch')
+        elif name == 'botw160.render-1080':
+            recipe = entry['shared_recipe']
+            require(recipe == dict(path='games/botw/guest_patches/render_resolution.cpp',
+                entrypoint='apply_render_1080',platform='android-arm64',
+                input_sha256='60474b0e3056daf4aee06c875de30bb001310d934437da0c4e99bdb76ca05007',
+                output_sha256='d48e4b5eb443a5a9f8f370101d4fd7182a36830a4b87efa5a6c2be9edff025ea',
+                module_offset=0x1821670,bytes=12,activation='explicit_1080p_launch_setting'), 'Resolution recipe identity drift')
+            body = source(root,recipe['path']).read_text()
+            require(all(recipe[field] in body for field in ('entrypoint','input_sha256','output_sha256')), 'Resolution source identity mismatch')
+        elif name in ('botw160.realtime-vfr','botw160.pad-repeat','botw160.movie-pacing'):
+            recipe=entry['shared_recipe']
+            require(recipe == dict(path='games/botw/guest_patches/realtime.cpp',
+                entrypoint='RealtimeSession' if name.endswith('movie-pacing') else 'apply_realtime',
+                platform='android-arm64',activation='default_60fps_with_measured_game_time',
+                group='botw160.realtime-vfr+pad-repeat+movie-pacing'), 'Timing recipe identity drift')
+            require(recipe['entrypoint'] in source(root,recipe['path']).read_text(), 'Missing timing implementation')
+        else:
+            require(entry['shared_recipe'] is None, 'Unreviewed executable recipe')
         require(entry['reason'] and entry['evidence'] and entry['migration_acceptance'], 'Missing rationale or acceptance')
         require(set(entry['status']) == {'macos-arm64', 'android-arm64'} and
-                entry['status']['android-arm64'] == 'pending_validation' and
+                entry['status']['android-arm64'] == ('implemented_pending_gameplay_validation' if name in ('botw160.exclusive-acquire','botw160.render-1080','botw160.realtime-vfr','botw160.pad-repeat','botw160.movie-pacing') else 'pending_validation') and
                 entry['status']['macos-arm64'] in ('legacy', 'apple_mobile_reference'), 'Unverified migration status')
         implementation = entry['legacy_implementation']
         body = source(root, implementation['path']).read_text()
@@ -84,7 +111,7 @@ def validate(catalog, root=ROOT, manifest=None):
         for name, expected in catalog['modules'].items():
             require(build_id(modules[name]['build_id']) == build_id(expected['build_id']) and
                     modules[name]['source_sha256'] == expected['source_sha256'], 'Manifest executable mismatch')
-    return dict(status='pass', scope='inventory_only', profile=catalog['profile'], entries=len(entries), enabled_recipes=0)
+    return dict(status='pass', scope='inventory_and_android_recipe', profile=catalog['profile'], entries=len(entries), enabled_recipes=4)
 
 
 if __name__ == '__main__':

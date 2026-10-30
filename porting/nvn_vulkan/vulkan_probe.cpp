@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "nvn_vulkan.h"
+#include "vulkan_driver.h"
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -11,10 +12,11 @@ int main(int argc, char **argv) {
             puts(name);
         return 0;
     }
-    if (argc != 2) {
-        fprintf(stderr, "Pass a private writable shader-cache directory\n");
+    if (argc != 2 && argc != 5) {
+        fprintf(stderr, "Pass a private writable shader-cache directory [driver hooks directory]\n");
         return 2;
     }
+    if(argc==5)if(const char* error=mng_vulkan_initialize(argv[2],argv[3],argv[4])){fprintf(stderr,"%s\n",error);return 2;}
     char report[2048]{};
     int result = mng_nvn_self_test(argv[1], report, sizeof(report));
     puts(report);

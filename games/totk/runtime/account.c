@@ -18,7 +18,13 @@ static struct{uint64_t pre[8];pthread_mutex_t m;uint64_t post[8];} guarded={{GUA
 #define lock_ guarded.m
 static _Atomic(uint64_t) lock_owner;
 static void check_guard(void){for(unsigned i=0;i<8;i++)if(guarded.pre[i]!=GUARD||guarded.post[i]!=GUARD){fprintf(stderr,"[totk] account lock guard %s[%u] overwritten: %#llx\n",guarded.pre[i]!=GUARD?"pre":"post",i,(unsigned long long)(guarded.pre[i]!=GUARD?guarded.pre[i]:guarded.post[i]));runtime_fail("host memory near the account lock was overwritten");}}
-static void lock_acquire(void){check_guard();pthread_mutex_lock(&lock_);uint64_t t;pthread_threadid_np(NULL,&t);lock_owner=t;}
+static void lock_acquire(void){check_guard();pthread_mutex_lock(&lock_);uint64_t t;
+#ifdef __ANDROID__
+ t=(uint64_t)gettid();
+#else
+ pthread_threadid_np(NULL,&t);
+#endif
+ lock_owner=t;}
 static void lock_release(void){lock_owner=0;pthread_mutex_unlock(&lock_);check_guard();}
 uint64_t runtime_account_lock_owner(void){const uint32_t *w=(const uint32_t *)(const void *)&guarded;fprintf(stderr,"[totk-dump] account lock with guards @%p:",(void *)&guarded);for(unsigned i=0;i<sizeof(guarded)/4;i++)fprintf(stderr," %08x",w[i]);fputc('\n',stderr);return lock_owner;}
 static uint64_t tokens[64],nextToken=1;

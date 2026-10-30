@@ -7,6 +7,7 @@
 namespace mng {
 class Input {
 public:
+    void configure(bool swap_ab);
     uint64_t begin();
     void end(uint64_t session);
     bool device(uint64_t session,int64_t id,uint64_t epoch,const std::string& profile,
@@ -14,11 +15,14 @@ public:
     bool packet(uint64_t session,int64_t id,uint64_t epoch,uint64_t sequence,
                 spatial::input::ControlEvent control,std::vector<spatial::input::InputEvent> events);
     RuntimeGamepadState read();
+    void clear();
+    void block(bool value);
 private:
     std::mutex mutex;
     spatial::input::InputHub hub;
     uint64_t token{};
-    struct Device { uint64_t epoch; spatial::input::DeviceIdentity identity; };
+    bool swap_ab{}, blocked{};
+    struct Device { uint64_t epoch; spatial::input::DeviceIdentity identity; uint64_t incoming_sequence{},hub_sequence{}; };
     std::map<int64_t,Device> devices;
 };
 extern Input input;

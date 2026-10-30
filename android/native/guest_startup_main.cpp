@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <unistd.h>
 
@@ -22,6 +23,12 @@ int main(int argc, char** argv) {
     action.sa_handler=timeout;
     sigemptyset(&action.sa_mask);
     if (sigaction(SIGALRM,&action,nullptr)!=0) return 2;
-    alarm(15);
+    unsigned seconds=15;
+    if(const char* value=std::getenv("MNG_STARTUP_TIMEOUT")) {
+        char* end; const auto parsed=std::strtoul(value,&end,10);
+        if(*end||parsed<1||parsed>3600)return 2;
+        seconds=unsigned(parsed);
+    }
+    alarm(seconds);
     mng::startup_probe(argv[1],argv[2]);
 }

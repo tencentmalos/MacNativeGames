@@ -23,6 +23,12 @@ for line in args.source.read_text().splitlines():
         code = re.sub(r'mrs\s+(x\d+),\s*tpidrro_el0\b',
                       lambda m: f'mrs {m[1]}, tpidr_el0\n    ldur {m[1]}, [{m[1]}, #-8]', code)
     lines.append(code + sep + comment)
+    # These assembly-to-assembly branches carry private arguments in x16/x17.
+    # ELF PLT veneers clobber both registers, unlike a local branch. Hide every
+    # defined gate entry so shared-library linkage cannot interpose a veneer.
+    symbol = re.fullmatch(r'\s*\.globl\s+(\w+)\s*', code)
+    if symbol:
+        lines.append(f'.hidden {symbol[1]}')
 lines.append('.section .note.GNU-stack,"",@progbits')
 args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text('\n'.join(lines) + '\n')

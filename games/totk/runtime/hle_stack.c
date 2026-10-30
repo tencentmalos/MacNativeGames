@@ -1,3 +1,8 @@
+#ifdef MNG_LITEP_RUNTIME
+#include "profile_c.h"
+#else
+#define MNG_PROFILE_SCOPE(name) ((void)0)
+#endif
 /* Host functions handed to guest code are wrapped so they run on the guest thread's host stack (hle_stack.S).
    Diagnostics (TOTK_INPUT_FILE "hletrace <0|1|2>"): while tracing, every wrapped call is counted per function; in mode 2
    the first call of each function since tracing began is also logged with the time and the calling guest thread (so a
@@ -20,6 +25,17 @@ void *runtime_hle_targets[HLE_THUNKS];
 uint64_t runtime_hle_tsd_off;
 int runtime_hle_trace;                                   /* read by hle_stack.S on every wrapped call */
 static const char *names[HLE_THUNKS];
+#ifdef MNG_LITEP_RUNTIME
+static const char *profile_names[HLE_THUNKS];
+static unsigned profile_markers[HLE_THUNKS];
+uint64_t runtime_hle_profile_begin(unsigned i) {
+    // Begin/end markers deliberately span this wrapper; an enclosing HLE scope
+    // would cross their endpoints and corrupt the per-thread profiler stack.
+    if(i<HLE_THUNKS && __atomic_load_n(&profile_markers[i],__ATOMIC_ACQUIRE))return 0;
+    const char *name=i<HLE_THUNKS?__atomic_load_n(&profile_names[i],__ATOMIC_ACQUIRE):NULL;
+    return mng_profile_begin(name?name:"HLE.Import.Unknown");
+}
+#endif
 static _Atomic uint64_t counts[HLE_THUNKS];
 static uint64_t since[HLE_THUNKS];
 static _Atomic unsigned char seen[HLE_THUNKS];
@@ -40,9 +56,23 @@ void *runtime_hle_wrap_named(void *fn, const char *name) {
         if (used == HLE_THUNKS) runtime_fail("host-stack wrapper table full");
         __atomic_store_n(&runtime_hle_targets[used++], fn, __ATOMIC_RELEASE);
     }
-    if (!names[i] && name) names[i] = strdup(name);
+    if (!names[i] && name) {
+        names[i] = strdup(name);
+#ifdef MNG_LITEP_RUNTIME
+        size_t length=strlen(name)+12;char *label=malloc(length);
+        if(label){snprintf(label,length,"HLE.Import.%s",name);__atomic_store_n(&profile_names[i],label,__ATOMIC_RELEASE);}
+#endif
+    }
     pthread_mutex_unlock(&lock);
     return runtime_hle_thunks + (size_t)i * HLE_THUNK_BYTES;
+}
+void *runtime_hle_wrap_profile_marker(void *fn,const char *name) {
+    void *wrapper=runtime_hle_wrap_named(fn,name);
+#ifdef MNG_LITEP_RUNTIME
+    if(wrapper){size_t i=((char*)wrapper-runtime_hle_thunks)/HLE_THUNK_BYTES;
+        __atomic_store_n(&profile_markers[i],1,__ATOMIC_RELEASE);}
+#endif
+    return wrapper;
 }
 void *runtime_hle_wrap(void *fn) { return runtime_hle_wrap_named(fn, NULL); }
 
@@ -103,7 +133,13 @@ void runtime_hle_trace_set(int mode) {
 
 /* Called on a guest thread's own host stack before it enters guest code; top must leave room for the caller's frame. */
 void runtime_hle_stack_set(uintptr_t top) {
-    uintptr_t tp; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+    uintptr_t tp;
+#ifdef __ANDROID__
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    memcpy(&tp, (const void *)(tp - 8), sizeof tp);
+#else
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+#endif
     if (!runtime_hle_tsd_off) runtime_fail("host-stack slot not initialised");
     *(volatile uintptr_t *)(tp + runtime_hle_tsd_off) = top & ~(uintptr_t)15;
 }

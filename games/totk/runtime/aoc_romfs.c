@@ -10,8 +10,12 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
+#ifdef __ANDROID__
+#define TOTK_UI(zh,en) (en)
+#else
 #include "totk_ui_lang.h"
-#include <CommonCrypto/CommonDigest.h>
+#endif
+#include "platform_digest.h"
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -19,6 +23,10 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#ifdef __ANDROID__
+#define st_mtimespec st_mtim
+#define st_ctimespec st_ctim
+#endif
 #include <unistd.h>
 #define NOT_FOUND 0x202u
 #define UNSUPPORTED 0x6402u
@@ -60,6 +68,14 @@ static Proof proof_for(const struct stat *s, const char *sha) {
     p.mtime_s = s->st_mtimespec.tv_sec; p.mtime_ns = s->st_mtimespec.tv_nsec; p.ctime_s = s->st_ctimespec.tv_sec; p.ctime_ns = s->st_ctimespec.tv_nsec;
     snprintf(p.sha, sizeof p.sha, "%s", sha); return p;
 }
+static int proof_equal(const Proof *a, const Proof *b) {
+    /* A returned C struct need not retain initialized padding bytes. Compare
+       the identity fields, never the object representation. */
+    return a->size == b->size && a->dev == b->dev && a->ino == b->ino &&
+        a->mtime_s == b->mtime_s && a->mtime_ns == b->mtime_ns &&
+        a->ctime_s == b->ctime_s && a->ctime_ns == b->ctime_ns &&
+        !memcmp(a->sha, b->sha, sizeof a->sha);
+}
 /* The image's full SHA-256 once; afterwards a record of the file's identity (size, inode, times, expected hash) in the
    volume's folder (TOTK_ROMFS_PROOF_DIR elsewhere, as romfs.c); TOTK_ROMFS_VERIFY=full hashes again. */
 static void verify_image(Vol *v, const char *dir) {
@@ -70,12 +86,21 @@ static void verify_image(Vol *v, const char *dir) {
     int force = getenv("TOTK_ROMFS_VERIFY") && !strcmp(getenv("TOTK_ROMFS_VERIFY"), "full");
     int pf = open(path, O_RDONLY | O_NOFOLLOW);
     if (pf >= 0) { int ok = read(pf, &saved, sizeof saved) == (ssize_t)sizeof saved; close(pf);
-        if (ok && !force && !memcmp(&saved, &want, sizeof want)) { fprintf(stderr, "[botw] add-on content %d unchanged; reused the SHA-256 verification record\n", v->index); return; } }
+        if (ok && !force && proof_equal(&saved, &want)) { fprintf(stderr, "[botw] add-on content %d unchanged; reused the SHA-256 verification record\n", v->index); return; } }
     char what[64]; snprintf(what, sizeof what, "%s %d", TOTK_UI("校验追加内容", "Verifying add-on content"), v->index);
     fprintf(stderr, "[botw] verifying add-on content %d SHA-256 (%llu bytes)%s\n", v->index, (unsigned long long)v->image_size, force ? " [forced]" : "");
     sha_fd(v->image_fd, v->image_sha, v->image_size, what);
     need(fstat(v->image_fd, &st) == 0 && (uint64_t)st.st_size == v->image_size, "add-on content image stat");
-    Proof after = proof_for(&st, v->image_sha); need(!memcmp(&after, &want, sizeof want), "add-on content changed during verification");
+    Proof after = proof_for(&st, v->image_sha);
+    if (!proof_equal(&after, &want)) {
+        fprintf(stderr, "[botw] add-on content identity changed: size %llu/%llu dev %llu/%llu ino %llu/%llu mtime %lld.%lld/%lld.%lld ctime %lld.%lld/%lld.%lld\n",
+            (unsigned long long)want.size, (unsigned long long)after.size,
+            (unsigned long long)want.dev, (unsigned long long)after.dev,
+            (unsigned long long)want.ino, (unsigned long long)after.ino,
+            (long long)want.mtime_s, (long long)want.mtime_ns, (long long)after.mtime_s, (long long)after.mtime_ns,
+            (long long)want.ctime_s, (long long)want.ctime_ns, (long long)after.ctime_s, (long long)after.ctime_ns);
+        runtime_fail("add-on content changed during verification");
+    }
     if (snprintf(tmp, sizeof tmp, "%s/.aoc%d-verified-v1.%ld.tmp", dir, v->index, (long)getpid()) >= (int)sizeof tmp) return;
     int out = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (out >= 0) { int ok = write(out, &want, sizeof want) == (ssize_t)sizeof want && fsync(out) == 0; close(out); if (!ok || rename(tmp, path) != 0) unlink(tmp); }

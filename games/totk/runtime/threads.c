@@ -1,3 +1,8 @@
+#ifdef MNG_LITEP_RUNTIME
+#include "profile_c.h"
+#else
+#define MNG_PROFILE_SCOPE(name) ((void)0)
+#endif
 /* Adapted from pinned D2R Mobile host/hle_thread.c, MIT.
  * Game-specific diagnostics and optional timing accounting removed.
  * Core affinity is virtual bookkeeping; Darwin schedules pthreads. */
@@ -23,14 +28,27 @@
 // All waits hang on one global lock G, with one condition variable per thread; correctness first, performance to be measured later.
 #include "thread_compat.h"
 #include "dm_wait_stats.h"
+#include "../../../porting/runtime/lane_accounting.h"
+#include "../../../porting/runtime/lane_event_queue.h"
 #include "ipc.h"
 #include <errno.h>
 #include <sched.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <time.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+static int thread_relative_wait(pthread_cond_t *cv, pthread_mutex_t *lock, const struct timespec *delay) {
+    struct timespec end; clock_gettime(CLOCK_REALTIME, &end);
+    end.tv_sec += delay->tv_sec; end.tv_nsec += delay->tv_nsec;
+    if (end.tv_nsec >= 1000000000) { end.tv_sec++; end.tv_nsec -= 1000000000; }
+    return pthread_cond_timedwait(cv, lock, &end);
+}
+#else
 #include <mach/mach.h>
 #include <pthread/qos.h>
+#define thread_relative_wait pthread_cond_timedwait_relative_np
+#endif
 #include <dlfcn.h>
 
 #define R_TIMEOUT     0xEA01u   // 内核模块 1，描述 117 | Kernel module 1, description 117
@@ -64,13 +82,23 @@ typedef struct thr {
     // Current wait: kind 0=none 1=lock 2=condition 3=address 4=synchronization object
     int wkind, woke; uint64_t waddr, wkey; uint32_t wtag; int64_t wres;
     uint64_t wseq;             // 登记等待的先后序号：同优先级先到先醒（与 Horizon 内核 KThread 等待树同序） | Sequence number of wait registration: at equal priority first come, first woken (same order as the Horizon kernel's KThread wait tree)
+#ifdef MNG_LITEP_RUNTIME
+    uint64_t condition_epoch, condition_token, condition_id;
+    uint64_t address_epoch, address_token;
+#endif
     struct thr *next;          // 等待链 | Wait chain
     struct thr *all;           // 全部线程链（现场导出用） | All-threads chain (for the state dump)
     int last_svc; uint64_t last_lr, last_fp;
     int closed;                // 句柄已关：与 exited 同时成立才释放对象（Horizon：线程对象随最后一个引用消失） | Handle closed: the object is freed only when this holds together with exited (Horizon: the thread object goes away with the last reference)
     uint64_t nsvc;             // SVC 次数（现场导出用） | SVC count (for the state dump)
-    mach_port_t mport;         // 宿主线程端口（取 CPU 时间） | Host thread port (to get CPU time)
+#ifdef __ANDROID__
+    pid_t mport;
+#else
+    mach_port_t mport;
+#endif
+    /*         Host thread identity for diagnostics. */
     uint32_t qos;
+    unsigned lane_generation; int lane_index; // diagnostics only, serialized by G
     int cur_core;              // virtual core held while running guest code, -1 while blocked / not started
     int preempt;               // a higher-priority thread waits for this thread's core
     uint64_t cseq, core_since; struct thr *cnext;
@@ -169,7 +197,15 @@ static thr_t *pick(int kind, uint64_t a) {
 #ifdef GAME_BOTW
 static void wake_queue(thr_t *t);   /* below, with the virtual cores */
 #endif
-static void wake(thr_t *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; pthread_cond_signal(&t->cv);
+static void wake(thr_t *t, int64_t res) {
+#ifdef MNG_LITEP_RUNTIME
+    if(t->wkind==3)mng_profile_address_event("Guest.Address.Wake",t->address_epoch,t->address_token,t->wseq,t->waddr,t->handle,0,res);
+#endif
+    wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res;
+#ifdef MNG_LITEP_RUNTIME
+    mng_profile_guest_event("Guest.Condition.Wake",t->condition_epoch,t->condition_token,t->condition_id,t->handle,0,res);
+#endif
+    pthread_cond_signal(&t->cv);
 #ifdef GAME_BOTW
     wake_queue(t);
 #endif
@@ -186,6 +222,63 @@ static int64_t block_inner(thr_t *t, int kind, int64_t ns);
 #define NCORE 3
 static thr_t *g_core_owner[NCORE];
 static thr_t *g_core_wait;
+static mng_lane_accounting g_lane;
+static mng_lane_event_queue g_lane_events;
+static _Atomic int g_lane_enabled;
+static unsigned g_lane_generation=1;
+static pthread_mutex_t g_lane_consumer = PTHREAD_MUTEX_INITIALIZER;
+typedef struct {
+    uint64_t id,tid;
+    uint32_t handle;
+    int clock_valid;
+#ifdef __ANDROID__
+    clockid_t clock;
+#else
+    mach_port_t port;
+#endif
+} lane_thread;
+static lane_thread g_lane_threads[MNG_LANE_ROWS];
+static unsigned g_lane_thread_count;
+static uint64_t g_lane_registration_overflow, g_lane_unregistered;
+// Normal host context, holding G. Only clock identity is acquired here, never
+// CPU time. This cannot be called from the guest preemption signal handler.
+static int lane_register(thr_t *t) {
+    if(t->lane_generation==g_lane_generation)return t->lane_index;
+    unsigned n=__atomic_load_n(&g_lane_thread_count,__ATOMIC_RELAXED);
+    t->lane_generation=g_lane_generation;t->lane_index=-1;
+    if(n==MNG_LANE_ROWS){__atomic_fetch_add(&g_lane_registration_overflow,1,__ATOMIC_RELAXED);return -1;}
+    lane_thread d={0};d.id=t->id;d.handle=t->handle;
+#ifdef __ANDROID__
+    d.tid=__atomic_load_n(&t->mport,__ATOMIC_RELAXED);
+    d.clock_valid=t->started && !t->exited && !pthread_getcpuclockid(t->pt,&d.clock);
+#else
+    if(t->pt && !t->exited)pthread_threadid_np(t->pt,&d.tid);
+    d.port=__atomic_load_n(&t->mport,__ATOMIC_RELAXED);
+    d.clock_valid=d.port && mach_port_mod_refs(mach_task_self(),d.port,MACH_PORT_RIGHT_SEND,1)==KERN_SUCCESS;
+#endif
+    g_lane_threads[n]=d;t->lane_index=(int)n;
+    __atomic_store_n(&g_lane_thread_count,n+1,__ATOMIC_RELEASE);return (int)n;
+}
+static int lane_slot(thr_t *t) { // holding G; no allocation/OS calls, signal-safe
+    if(t->lane_generation==g_lane_generation)return t->lane_index;
+    __atomic_fetch_add(&g_lane_unregistered,1,__ATOMIC_RELAXED);return -1;
+}
+static void lane_owner(int c,thr_t *t,uint64_t now) {
+    if(!atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))return;
+    int row=t?lane_slot(t):-1;
+    if(t && row<0)row=-2;
+    mng_lane_events_push(&g_lane_events,(mng_lane_event){now,0,MNG_LANE_OWNER,row,c,
+        t?__atomic_load_n(&t->last_svc,__ATOMIC_RELAXED):-1,t?__atomic_load_n(&t->last_hle,__ATOMIC_RELAXED):0});
+}
+static void lane_wait(thr_t *t,uint64_t now) {
+    if(atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))
+        mng_lane_events_push(&g_lane_events,(mng_lane_event){now,t->mask,MNG_LANE_WAIT,lane_slot(t),-1,
+            __atomic_load_n(&t->last_svc,__ATOMIC_RELAXED),__atomic_load_n(&t->last_hle,__ATOMIC_RELAXED)});
+}
+static void lane_exit(thr_t *t,uint64_t now) {
+    if(atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))
+        mng_lane_events_push(&g_lane_events,(mng_lane_event){now,0,MNG_LANE_EXIT,lane_slot(t),-1,0,0});
+}
 static uint64_t g_core_wait_all_ns, g_core_wait_all_n;   // all guest threads' waits in core_take (holding G; dm_core_wait_stats)
 static int g_cores_on = -1;
 static int cores_enabled(void) { if (g_cores_on < 0) g_cores_on = getenv("TOTK_FREE_CORES") ? 0 : 1; return g_cores_on; }
@@ -244,12 +337,12 @@ static void core_grant(int c) {   // holding G: give free core c to the best wai
         if (core_allowed(*p, c) && (!b || (*p)->prio < b->prio || ((*p)->prio == b->prio && (*p)->cseq < b->cseq))) { b = *p; bp = p; }
 #endif
     if (!b) return;
-    *bp = b->cnext; b->cnext = NULL; b->cur_core = c; b->core_since = now_ns(); core_wait_complete(b, b->core_since); g_core_owner[c] = b; pthread_cond_signal(&b->cv);
+    *bp = b->cnext; b->cnext = NULL; b->cur_core = c; b->core_since = now_ns(); core_wait_complete(b, b->core_since); g_core_owner[c] = b; lane_owner(c,b,b->core_since); pthread_cond_signal(&b->cv);
 }
 static void core_put(thr_t *t) {   // holding G
     if (t->cur_core < 0) return;
     if (dm_core_diag_enabled() && t->core_since) t->core_held_ns += now_ns() - t->core_since;   // core_table
-    int c = t->cur_core; t->cur_core = -1; t->preempt = 0; g_core_owner[c] = NULL; core_grant(c);
+    int c = t->cur_core; if(atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))lane_owner(c,NULL,now_ns()); t->cur_core = -1; t->preempt = 0; g_core_owner[c] = NULL; core_grant(c);
 }
 #ifdef GAME_BOTW
 /* Asynchronous preemption (Breath of the Wild, botw.md). Horizon switches a core to a better thread the moment that thread
@@ -320,6 +413,7 @@ static void wake_queue(thr_t *t) {
     for (int i = 0; i < NCORE; i++) if (core_allowed(t, i) && !g_core_owner[i]) return;   /* a free core: core_take takes it */
     t->cseq = ++g_wseq; t->cnext = g_core_wait; g_core_wait = t; t->cqueued = 1; t->cwait_ns = now_ns();
     if (dm_wait_stats_enabled()) t->core_stats_since = t->cwait_ns;
+    lane_wait(t,t->cwait_ns);
     core_kick(t);
 }
 #endif
@@ -330,6 +424,11 @@ static int g_core_reports;
 /* Enter/return holding G. Snapshot retained Mach ports, then drop G before suspending or formatting:
    an owner may be in host code holding an allocator/dyld lock, or may next need the scheduler lock. */
 static void core_wait_report(thr_t *w, uint64_t since) {
+#ifdef __ANDROID__
+    if (g_core_reports++ >= 400) return;
+    fprintf(stderr, "[core-wait] thread %#x priority %d mask %#llx waited %.1f ms; live PCs require native debugger\n",
+            w->handle, w->prio, (unsigned long long)w->mask, (now_ns()-since)/1e6);
+#else
     if (g_core_reports++ >= 400) return;
     struct { mach_port_t port; uint32_t handle; int prio; uint64_t mask, held; int svc; } owners[NCORE] = {0};
     uint64_t now = now_ns(), mask = w->mask; uint32_t handle = w->handle; int prio = w->prio;
@@ -362,6 +461,7 @@ static void core_wait_report(thr_t *w, uint64_t since) {
     }
     fputc('\n',stderr);
     pthread_mutex_lock(&G);
+#endif
 }
 static void core_take(thr_t *t) {   // holding G; waits until a core in t's mask is handed over
     if (!cores_enabled() || t->cur_core >= 0) return;
@@ -371,29 +471,61 @@ static void core_take(thr_t *t) {   // holding G; waits until a core in t's mask
     uint64_t w0 = c < 0 && dm_wait_stats_enabled() ? now_ns() : 0;
     if (w0 && !t->core_stats_since) t->core_stats_since = w0;
 #ifdef GAME_BOTW
-    if (c >= 0) { core_unqueue(t); t->cur_core = c; t->core_since = now_ns(); core_wait_complete(t, t->core_since); g_core_owner[c] = t; return; }
+    if (c >= 0) { core_unqueue(t); t->cur_core = c; t->core_since = now_ns(); core_wait_complete(t, t->core_since); g_core_owner[c] = t; lane_owner(c,t,t->core_since); return; }
     if (!t->cqueued) { t->cseq = ++g_wseq; t->cnext = g_core_wait; g_core_wait = t; t->cqueued = 1; t->cwait_ns = now_ns(); }
+    if(atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))lane_wait(t,now_ns());
     int reported = 0;
     while (t->cur_core < 0) {   // kicked owners are signalled again every millisecond; otherwise look again every 20 ms (starvation, inheritance)
         struct timespec again = {0, core_kick(t) ? 1000000 : 20000000};
-        pthread_cond_timedwait_relative_np(&t->cv, &G, &again);
+        thread_relative_wait(&t->cv, &G, &again);
         if (!reported && t->cur_core < 0 && t->cwait_ns && now_ns() - t->cwait_ns >= STARVE_NS) { if (core_diag_on()) core_wait_report(t, t->cwait_ns); reported = 1; }
     }
     t->cwait_ns = 0;
 #else
-    if (c >= 0) { t->cur_core = c; t->core_since = now_ns(); g_core_owner[c] = t; return; }
+    if (c >= 0) { t->cur_core = c; t->core_since = now_ns(); g_core_owner[c] = t; lane_owner(c,t,t->core_since); return; }
     t->cseq = ++g_wseq; t->cnext = g_core_wait; g_core_wait = t;
     for (int i = 0; i < NCORE; i++) if (core_allowed(t, i) && g_core_owner[i] && g_core_owner[i]->prio > t->prio) g_core_owner[i]->preempt = 1;
+    if(atomic_load_explicit(&g_lane_enabled,memory_order_relaxed))lane_wait(t,now_ns());
     int reported = 0;
     while (t->cur_core < 0) {
         if (reported || !core_diag_on()) { pthread_cond_wait(&t->cv, &G); continue; }
         struct timespec again = {0, CORE_DIAG_NS};   // TOTK_CORE_DIAG: one look at the owners once a wait gets long
-        pthread_cond_timedwait_relative_np(&t->cv, &G, &again);
+        thread_relative_wait(&t->cv, &G, &again);
         if (t->cur_core < 0 && now_ns() - w0 >= CORE_DIAG_NS) { core_wait_report(t, w0); reported = 1; }
     }
 #endif
 }
 static thr_t *me_or_null(void) { return g_keythr ? pthread_getspecific(g_keythr) : NULL; }
+/* Normal host call sites only. core_take is also used by the preemption signal
+   handler, which must never call the profiler. G protects this owner snapshot;
+   it identifies owners at entry, not every owner during a changing wait. */
+static void core_take_traced(thr_t *t) {
+#ifdef MNG_LITEP_RUNTIME
+    int blocked=cores_enabled() && t->cur_core<0;
+    for(int i=0;blocked && i<NCORE;i++)if(core_allowed(t,i) && !g_core_owner[i])blocked=0;
+    uint64_t token=blocked?mng_profile_begin("Sync.VirtualCore.Wait"):0;
+    if(token){
+        static const char *handles[]={"Core.Wait.Owner0","Core.Wait.Owner1","Core.Wait.Owner2"};
+        static const char *held[]={"Core.Wait.HeldNs0","Core.Wait.HeldNs1","Core.Wait.HeldNs2"};
+        static const char *svc[]={"Core.Wait.Svc0","Core.Wait.Svc1","Core.Wait.Svc2"};
+        _Static_assert(NCORE==3,"Update profiler owner fields for the virtual core count");
+        mng_profile_counter("Core.Wait.Thread",t->handle);
+        mng_profile_counter("Core.Wait.Mask",t->mask);
+        mng_profile_counter("Core.Wait.Priority",t->prio);
+        uint64_t now=now_ns();
+        for(int i=0;i<NCORE;i++){
+            thr_t *o=g_core_owner[i];
+            mng_profile_counter(handles[i],o?o->handle:0);
+            mng_profile_counter(held[i],o && o->core_since?now-o->core_since:0);
+            mng_profile_counter(svc[i],o?o->last_svc:-1);
+        }
+    }
+#endif
+    core_take(t);
+#ifdef MNG_LITEP_RUNTIME
+    if(token){mng_profile_counter("Core.Wait.Granted",t->cur_core);mng_profile_end(token);}
+#endif
+}
 #ifdef GAME_BOTW
 extern uint64_t runtime_hle_tsd_off;                 // hle_stack.c: host-stack slot, cleared while a host function runs
 int runtime_guest_code_pc(uint64_t pc);              // loader.c
@@ -401,8 +533,14 @@ static void preempt_signal(int sig, siginfo_t *si, void *context) {
     (void)sig; (void)si;
     thr_t *t = me_or_null();
     if (!t || !__atomic_load_n(&t->preempt, __ATOMIC_ACQUIRE) || t->cur_core < 0) return;
+#ifdef __ANDROID__
+    uint64_t pc = ((ucontext_t *)context)->uc_mcontext.pc;
+    uintptr_t tp; __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    memcpy(&tp, (const void *)(tp - 8), sizeof tp);
+#else
     uint64_t pc = (uint64_t)((ucontext_t *)context)->uc_mcontext->__ss.__pc;
     uintptr_t tp; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+#endif
     if (!runtime_hle_tsd_off || !*(volatile uintptr_t *)(tp + runtime_hle_tsd_off) || !runtime_guest_code_pc(pc)) return;
     int saved = errno;
     pthread_mutex_lock(&G);
@@ -412,7 +550,7 @@ static void preempt_signal(int sig, siginfo_t *si, void *context) {
     errno = saved;
 }
 #endif
-void runtime_thread_note_hle(unsigned i) { thr_t *t = me_or_null(); if (t) t->last_hle = (int)i + 1; }   // hle_stack.c, while tracing
+void runtime_thread_note_hle(unsigned i) { thr_t *t = me_or_null(); if (t) __atomic_store_n(&t->last_hle,(int)i+1,__ATOMIC_RELAXED); }   // hle_stack.c, while tracing
 uint32_t runtime_thread_current_handle(void) { thr_t *t = me_or_null(); return t ? t->handle : 0; }
 // Host services that wait for other threads or the GPU give the core up around the wait (no host locks held).
 int runtime_core_away(void) {
@@ -421,18 +559,21 @@ int runtime_core_away(void) {
 }
 void runtime_core_back(int *away) {
     thr_t *t = me_or_null(); if (!*away || !t) return;
-    pthread_mutex_lock(&G); core_take(t); pthread_mutex_unlock(&G);
+    MNG_PROFILE_SCOPE("Sync.CoreReacquire");
+    {MNG_PROFILE_SCOPE("Sync.CoreSchedulerLock");pthread_mutex_lock(&G);}
+    core_take_traced(t); pthread_mutex_unlock(&G);
 }
 // Preemption point at SVC entry: a higher-priority thread waits for this core.
 void runtime_core_checkpoint(void) {
+    MNG_PROFILE_SCOPE("Sync.CoreCheckpoint");
     thr_t *t = me_or_null();
 #ifdef GAME_BOTW
     /* Breath of the Wild (botw.md): the preempt flag is set when a waiter queues up, but a waiter's mask or priority can
        change while it waits; so at every SVC a core owner also looks at the queue itself (core_should_yield: Horizon's
        rule, see core_beats). */
     if (!t || t->cur_core < 0 || (!t->preempt && !__atomic_load_n(&g_core_wait, __ATOMIC_RELAXED))) return;
-    pthread_mutex_lock(&G);
-    if (t->cur_core >= 0 && core_should_yield(t)) { core_put(t); core_take(t); }
+    {MNG_PROFILE_SCOPE("Sync.CoreSchedulerLock");pthread_mutex_lock(&G);}
+    if (t->cur_core >= 0 && core_should_yield(t)) { core_put(t); core_take_traced(t); }
     else t->preempt = 0;
     pthread_mutex_unlock(&G);
     return;
@@ -444,10 +585,17 @@ int runtime_current_core(void) { thr_t *t = me_or_null(); return t ? (t->cur_cor
 
 static int64_t block(thr_t *t,int kind,int64_t ns) {
     if (ns == 0) return block_inner(t, kind, ns);
-    core_put(t); int64_t r = block_inner(t, kind, ns); core_take(t); return r;
+    core_put(t); int64_t r = block_inner(t, kind, ns);
+    {MNG_PROFILE_SCOPE("Sync.CoreReacquire");core_take_traced(t);}return r;
 }
 static int64_t block_inner(thr_t *t, int kind, int64_t ns) {
+    MNG_PROFILE_SCOPE(kind==1?"Sync.GuestMutex":kind==2?"Sync.GuestCondition":kind==3?"Sync.GuestAddress":"Sync.GuestObject");
     t->wkind = kind; t->woke = 0; t->next = g_wait; g_wait = t; t->wseq = ++g_wseq;
+#ifdef MNG_LITEP_RUNTIME
+    if(kind==3)mng_profile_address_event("Guest.Address.Enqueue",t->address_epoch,t->address_token,t->wseq,t->waddr,t->handle,0,0);
+    if(kind==2){t->condition_id=t->wseq;
+        mng_profile_guest_event("Guest.Condition.Enqueue",t->condition_epoch,t->condition_token,t->condition_id,t->handle,0,0);}
+#endif
     if (ns == 0) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
     struct timespec dl;
     int det_wait = ns > 0 && dm_detclock_enabled();
@@ -514,13 +662,17 @@ __attribute__((weak)) void runtime_hle_stack_set(uintptr_t top) { (void)top; }  
 static void *thread_main(void *p) {
     thr_t *t = p;
     pthread_setspecific(g_keythr, t);
+#ifdef __ANDROID__
+    __atomic_store_n(&t->mport,gettid(),__ATOMIC_RELAXED);
+#else
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
     pthread_get_qos_class_np(pthread_self(), &qc, &rp); t->qos = (uint32_t)qc;
-    t->mport = pthread_mach_thread_np(pthread_self());
+    __atomic_store_n(&t->mport,pthread_mach_thread_np(pthread_self()),__ATOMIC_RELAXED);
+#endif
 
     guest_thread_init();
-    pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); core_take(t); pthread_mutex_unlock(&G);
+    pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); if(atomic_load(&g_lane_enabled))lane_register(t); core_take(t); pthread_mutex_unlock(&G);
     { volatile char marker = 0; runtime_hle_stack_set((uintptr_t)&marker - 1024); }   // host services of this thread run below this frame
     dm_thread_enter(t->entry, t->arg, t->stack_top,t->host_context);   // 不返回：客体须经 ExitThread 退出 | Does not return: the guest must exit through ExitThread
     die("客体线程入口返回");
@@ -537,6 +689,7 @@ static _Noreturn void thread_exit_on_host(void *argument) {
     // No logging here: the exit happens on the guest thread's own stack (some are only a dozen or so KiB), and a printf with floating point would blow the stack (real-device smoke test: SIGBUS when LibcurlResolver exits, backtrace fprintf → __dtoa). Only the time is recorded, and it is printed later in the state dump
     pthread_mutex_lock(&G);
     core_put(t);
+    lane_exit(t,now_ns());
     t->exited = 1;
     for (thr_t *w = g_wait; w; ) { thr_t *n = w->next; if (w->wkind == 4) wake(w, -1); w = n; }   // 同步等待者重查 | Synchronization waiters re-check
     pthread_setspecific(g_keythr, NULL);
@@ -557,18 +710,30 @@ uint32_t svc_thread_main_init(void) {
     thr_t *t = calloc(1, sizeof *t);
     pthread_cond_init(&t->cv, NULL);
 #ifdef GAME_BOTW
-    t->started = 1; t->prio = 44; t->core = PROCESS_IDEAL_CORE; t->mask = 1u << PROCESS_IDEAL_CORE; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);
+    t->started = 1; t->prio = 44; t->core = PROCESS_IDEAL_CORE; t->mask = 1u << PROCESS_IDEAL_CORE; t->pt = pthread_self();
+#ifdef __ANDROID__
+    __atomic_store_n(&t->mport,gettid(),__ATOMIC_RELAXED);
 #else
-    t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self(); t->mport = pthread_mach_thread_np(t->pt);
+    t->mport = pthread_mach_thread_np(t->pt);
+#endif
+#else
+    t->started = 1; t->prio = 44; t->core = 0; t->mask = 7; t->pt = pthread_self();
+#ifdef __ANDROID__
+    __atomic_store_n(&t->mport,gettid(),__ATOMIC_RELAXED);
+#else
+    t->mport = pthread_mach_thread_np(t->pt);
+#endif
 #endif
     t->cur_core = -1;
-    pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; core_take(t); pthread_mutex_unlock(&G);
+    pthread_mutex_lock(&G); t->handle = h_new(O_THREAD, t); t->id = g_next_id++; t->all = g_all; g_all = t; if(atomic_load(&g_lane_enabled))lane_register(t); core_take(t); pthread_mutex_unlock(&G);
 #ifdef GAME_BOTW
     g_main_handle = t->handle;
 #endif
     pthread_setspecific(g_keythr, t);
+#ifndef __ANDROID__
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0;
     pthread_get_qos_class_np(pthread_self(), &qc, &rp); t->qos = (uint32_t)qc;
+#endif
     return t->handle;
 }
 
@@ -591,9 +756,16 @@ static void core_table(void) {
         uint64_t held=t->core_held_ns+(t->cur_core>=0 && t->core_since ? now-t->core_since : 0);
         uint64_t dh=held-t->core_held_prev, dw=t->core_wait_ns-t->core_wait_prev, dn=t->core_nwait-t->core_nwait_prev;
         t->core_held_prev=held; t->core_wait_prev=t->core_wait_ns; t->core_nwait_prev=t->core_nwait;
-        uint64_t cpu=0; thread_basic_info_data_t bi; mach_msg_type_number_t count=THREAD_BASIC_INFO_COUNT;
+        uint64_t cpu=0;
+#ifdef __ANDROID__
+        clockid_t clock; struct timespec stamp;
+        if (!t->exited && !pthread_getcpuclockid(t->pt, &clock) && !clock_gettime(clock, &stamp))
+            cpu = (uint64_t)stamp.tv_sec * 1000000000ull + stamp.tv_nsec;
+#else
+        thread_basic_info_data_t bi; mach_msg_type_number_t count=THREAD_BASIC_INFO_COUNT;
         if (t->mport && thread_info(t->mport,THREAD_BASIC_INFO,(thread_info_t)&bi,&count)==KERN_SUCCESS)
             cpu=(uint64_t)(bi.user_time.seconds+bi.system_time.seconds)*1000000000ull+(uint64_t)(bi.user_time.microseconds+bi.system_time.microseconds)*1000ull;
+#endif
         uint64_t dc=cpu>=t->cpu_prev_ns ? cpu-t->cpu_prev_ns : 0; t->cpu_prev_ns=cpu;
         if (span && dh<50000000ull && dw<5000000ull) continue;
         if (n==ROWS) { truncated=1; continue; }
@@ -621,7 +793,7 @@ void dm_core_wait_stats(uint64_t *self_ns, uint64_t *all_ns, uint64_t *all_n) {
     pthread_mutex_unlock(&G);
 }
 uint32_t dm_guest_work_qos(unsigned *count) {
-    uint32_t qos = QOS_CLASS_UNSPECIFIED; unsigned n = 0;
+    uint32_t qos = 0; unsigned n = 0;
     pthread_mutex_lock(&G);
     for (thr_t *t = g_all; t; t = t->all) {
 #ifdef GAME_BOTW
@@ -728,7 +900,7 @@ static uint64_t yield_backoff_ns(uint64_t run_ns) {
 }
 
 int svc_thread(int num, uint64_t *regs) {
-    { thr_t *me = (g_keythr ? pthread_getspecific(g_keythr) : NULL); if (me) { me->last_svc = num; me->last_lr = regs[30]; me->last_fp = regs[29]; me->nsvc++; } }
+    { thr_t *me = (g_keythr ? pthread_getspecific(g_keythr) : NULL); if (me) { __atomic_store_n(&me->last_svc,num,__ATOMIC_RELAXED); me->last_lr = regs[30]; me->last_fp = regs[29]; me->nsvc++; } }
 
     switch (num) {
     case 0x08: {  // CreateThread(→w1 句柄; x1 入口, x2 参数, x3 栈顶, w4 优先级, w5 核) | CreateThread(→w1 handle; x1 entry, x2 argument, x3 stack top, w4 priority, w5 core)
@@ -751,7 +923,7 @@ int svc_thread(int num, uint64_t *regs) {
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);   // 退出即回收宿主资源（客体经句柄等待，不 join） | Host resources are reclaimed on exit (the guest waits through the handle, no join)
         if (pthread_create(&t->pt, &a, thread_main, t)) die("pthread_create");
         pthread_attr_destroy(&a);
-        LOG("CreateThread h=%#x entry=%#llx sp=%#llx", t->handle,t->entry,t->stack_top);
+        LOG("CreateThread h=%#x entry=%#llx sp=%#llx", t->handle,(unsigned long long)t->entry,(unsigned long long)t->stack_top);
         regs[0] = 0; regs[1] = t->handle; return 1;
     }
     case 0x09: {  // StartThread(w0)
@@ -866,14 +1038,27 @@ int svc_thread(int num, uint64_t *regs) {
         st32(key, 1);
         t->wkey = key; t->waddr = addr; t->wtag = (uint32_t)regs[2];
 #endif
+#ifdef MNG_LITEP_RUNTIME
+        t->condition_epoch=mng_profile_guest_epoch();
+        t->condition_token=t->condition_epoch?mng_profile_begin("Guest.Condition.Wait"):0;
+#endif
         int64_t r = block(t, 2, (int64_t)regs[3]);   // 超时：不重新拿锁（用户态自己拿） | Timeout: the lock is not re-acquired (user mode takes it itself)
+#ifdef MNG_LITEP_RUNTIME
+        mng_profile_guest_event("Guest.Condition.Resume",t->condition_epoch,t->condition_token,t->condition_id,t->handle,0,r);
+        mng_profile_end(t->condition_token);t->condition_token=0;t->condition_epoch=0;
+#endif
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x1D: {  // SignalProcessWideKey(x0 条件键, w1 个数，<=0 全部) | SignalProcessWideKey(x0 condition key, w1 count, <=0 all)
         uint64_t key = regs[0]; int cnt = (int)regs[1], n = 0;
         pthread_mutex_lock(&G);
-        for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) lock_acquire_for(w, w->waddr, w->wtag);   // 按内核顺序；转为锁等待或被唤醒后不再是 kind 2 | In kernel order; once turned into a lock wait or woken it is no longer kind 2
+        for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) {
+#ifdef MNG_LITEP_RUNTIME
+            mng_profile_guest_event("Guest.Condition.SelectedNotify",w->condition_epoch,w->condition_token,w->condition_id,w->handle,cur()->handle,0);
+#endif
+            lock_acquire_for(w, w->waddr, w->wtag);
+        }
         int left = 0; for (thr_t *w = g_wait; w; w = w->next) if (w->wkind == 2 && w->wkey == key) { left = 1; break; }
         if (!left) st32(key, 0);
         pthread_mutex_unlock(&G);
@@ -887,7 +1072,16 @@ int svc_thread(int num, uint64_t *regs) {
         int ok = type == 2 ? (int32_t)v == val : (int32_t)v < val;
         if (ok && type == 1) { while (!cas32(addr, &v, v - 1)) if (!((int32_t)v < val)) { ok = 0; break; } }
         if (!ok) r = R_BAD_STATE;
-        else { t->waddr = addr; r = block(t, 3, (int64_t)regs[3]); }
+        else { t->waddr = addr;
+#ifdef MNG_LITEP_RUNTIME
+            t->address_epoch=mng_profile_address_epoch();t->address_token=t->address_epoch?mng_profile_begin("Guest.Address.Wait"):0;
+#endif
+            r = block(t, 3, (int64_t)regs[3]);
+#ifdef MNG_LITEP_RUNTIME
+            mng_profile_address_event("Guest.Address.Resume",t->address_epoch,t->address_token,t->wseq,addr,t->handle,0,r);
+            mng_profile_end(t->address_token);t->address_token=0;t->address_epoch=0;
+#endif
+        }
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
@@ -908,7 +1102,12 @@ int svc_thread(int num, uint64_t *regs) {
             if (!cas32(addr, &e, (uint32_t)nv)) r = R_BAD_STATE;
         }
         if (!r) { int n = 0;
-            for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) wake(w, 0); }
+            for (thr_t *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) {
+#ifdef MNG_LITEP_RUNTIME
+                mng_profile_address_event("Guest.Address.SelectedNotify",w->address_epoch,w->address_token,w->wseq,addr,w->handle,cur()->handle,0);
+#endif
+                wake(w, 0);
+            } }
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
@@ -1061,6 +1260,15 @@ void runtime_event_signal(uint32_t hw) {
 }
 
 // ---------- Diagnostics: TOTK_DUMP_AFTER=<seconds> prints every guest thread's wait state and guest return chain ----------
+#ifdef __ANDROID__
+void runtime_dump_threads(void) {
+    if (pthread_mutex_trylock(&G)) { fprintf(stderr, "[threads] scheduler busy; use native debugger\n"); return; }
+    for (thr_t *t=g_all; t; t=t->all)
+        fprintf(stderr, "[threads] tid=%d handle=%#x priority=%d core=%d wait=%d svc=%#x lr=%#llx\n",
+                t->mport,t->handle,t->prio,t->cur_core,t->wkind,t->last_svc,(unsigned long long)t->last_lr);
+    pthread_mutex_unlock(&G);
+}
+#else
 #include "mach_vm_compat.h"
 #include <unistd.h>
 __attribute__((weak)) void runtime_describe_address(uint64_t a, char *out, size_t n) { snprintf(out, n, "%#llx", (unsigned long long)a); }   // loader.c names modules
@@ -1160,3 +1368,34 @@ __attribute__((constructor)) static void dump_init(void) {
     const char *e = getenv("TOTK_DUMP_AFTER"); if (!e) return;
     pthread_t th; pthread_create(&th, NULL, dump_after, (void *)(uintptr_t)strtoul(e, NULL, 10)); pthread_detach(th);
 }
+
+#endif
+
+#ifdef MNG_LITEP_RUNTIME
+#include "../../../porting/runtime/lane_runtime.inc"
+int runtime_profile_threads(char *out,unsigned capacity) {
+    struct row { uint32_t handle; uint64_t tid; int prio,core,wait,started,exited; uint64_t mask; } rows[256];
+    unsigned count=0;int truncated=0;
+    if(pthread_mutex_trylock(&G))return -1;
+    for(thr_t *t=g_all;t;t=t->all){
+        if(count==256){truncated=1;break;}
+        uint64_t host_tid = 0;
+#ifdef __ANDROID__
+        host_tid = __atomic_load_n(&t->mport,__ATOMIC_RELAXED);
+#else
+        if (t->pt && !t->exited) pthread_threadid_np(t->pt, &host_tid);
+#endif
+        rows[count++]=(struct row){t->handle,host_tid,t->prio,t->cur_core,t->wkind,t->started,t->exited,t->mask};
+    }
+    pthread_mutex_unlock(&G);
+    unsigned used=0;
+    int n=snprintf(out,capacity,"schema=mng.guest-threads.v1\nthread_count=%u\ntruncated=%d\n",count,truncated);
+    if(n<0 || (unsigned)n>=capacity)return -1;used=(unsigned)n;
+    for(unsigned i=0;i<count;++i){struct row *t=&rows[i];n=snprintf(out+used,capacity-used,
+        "thread handle=%#x host_tid=%llu priority=%d virtual_core=%d wait_kind=%d started=%d exited=%d core_mask=%#llx\n",
+        t->handle,(unsigned long long)t->tid,t->prio,t->core,t->wait,t->started,t->exited,(unsigned long long)t->mask);
+        if(n<0 || (unsigned)n>=capacity-used)return -1;used+=(unsigned)n;
+    }
+    return (int)used;
+}
+#endif

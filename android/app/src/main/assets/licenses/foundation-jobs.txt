@@ -1,0 +1,8 @@
+Foundation basic/async/async_task, basic/underlying/core, basic/meta/reflection, basic/allocator and modules/property
+Copyright (c) 2026 tencentmalos. All rights reserved.
+For study and research only. Not for redistribution.
+Source commit: 2f27d3bb41c1659d33b89905255fab2675fc0144
+Bundled Asio-derived support uses the Boost Software License; see boost-software-license.txt.
+Allocator support uses mimalloc (MIT); see mimalloc.txt.
+Yalantinglibs support uses Apache-2.0; see yalantinglibs.txt.
+This APK is a local research build, not a public binary distribution.

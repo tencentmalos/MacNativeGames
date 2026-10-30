@@ -1,15 +1,25 @@
 /* Read-only game RomFS, backed by the player's fully IVFC-verified image. */
 #include "runtime.h"
+#ifdef __ANDROID__
+#define TOTK_UI(zh,en) (en)
+#else
 #include "totk_ui_lang.h"
+#endif
 #include "romfs_config.h"
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
-#include <CommonCrypto/CommonDigest.h>
+#include "platform_digest.h"
+#ifndef __ANDROID__
 #include <TargetConditionals.h>
+#endif
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#ifdef __ANDROID__
+#define st_mtimespec st_mtim
+#define st_ctimespec st_ctim
+#endif
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,7 +97,9 @@ static RomfsProof proof_for(const struct stat *s) {
  p.dev=(uint64_t)s->st_dev;p.ino=(uint64_t)s->st_ino;p.size=(uint64_t)s->st_size;
  p.mtime_sec=s->st_mtimespec.tv_sec;p.mtime_nsec=s->st_mtimespec.tv_nsec;
  p.ctime_sec=s->st_ctimespec.tv_sec;p.ctime_nsec=s->st_ctimespec.tv_nsec;
+#ifndef __ANDROID__
  p.birth_sec=s->st_birthtimespec.tv_sec;p.birth_nsec=s->st_birthtimespec.tv_nsec;
+#endif
  return p;
 }
 static int proof_equal(const RomfsProof *a,const RomfsProof *b) {

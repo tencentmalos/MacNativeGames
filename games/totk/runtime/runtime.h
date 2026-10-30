@@ -164,3 +164,6 @@ void runtime_feedback_quiet(void);   /* focus lost: stop rumbling */
 void runtime_feedback_attach(GCController *controller);
 void runtime_feedback_detach(GCController *controller);
 #endif
+
+/* Startup-only bridge for profiler begin/end markers, excluded from HLE scopes. */
+void *runtime_hle_wrap_profile_marker(void *fn, const char *name);

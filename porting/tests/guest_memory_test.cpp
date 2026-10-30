@@ -11,6 +11,15 @@ int main() {
     constexpr uint64_t mib = 1ull << 20;
     GuestMemory m({2 * mib, 8 * mib, 16 * mib, 8 * mib, 2 * mib});
     need(m.base() + m.size() <= 1ull << 39);
+    m.register_mapping(0x100000000,4096,0xc,3);
+    need(m.query(0x100000000).state==0xc);
+    bool rejected=false;
+    try {m.unregister_mapping(0x100000000,8192);}catch(const std::exception&){rejected=true;}
+    need(rejected && m.query(0x100000000).state==0xc);
+    m.unregister_mapping(0x100000000,4096);
+    need(m.query(0x100000000).state==0x10);
+    m.register_mapping(0x100000000,4096,0xc,3);
+    m.unregister_mapping(0x100000000,4096);
     need(*m.info(12) == m.base() && *m.info(13) == m.size());
     need(*m.info(4) == m.heap() && *m.info(5) == 8 * mib && *m.info(7) == 2 * mib);
     need(m.query(m.base()).state == 0 && !m.info(999));

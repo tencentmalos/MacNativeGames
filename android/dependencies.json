@@ -2,15 +2,46 @@
   "foundation": {
     "repository": "git@github.com:tencentmalos/foundation.git",
     "commit": "2f27d3bb41c1659d33b89905255fab2675fc0144",
-    "modules": ["modules/audio", "modules/input"]
+    "modules": [
+      "modules/audio",
+      "modules/input",
+      "modules/imgui_overlay",
+      "modules/perf_metrics",
+      "third_party/imgui"
+    ]
   },
   "d2r_vulkan": {
     "repository": "https://github.com/jhaizhou-ops/d2r-mobile.git",
     "commit": "758f5d41509af5cd38b7eb934bc2334bdb3e3342",
-    "modules": ["dm/gfx/vulkan", "dm/gfx/nvn/nvn_tex.c", "dm/gfx/tex/nvn_deswizzle.c"]
+    "modules": [
+      "dm/gfx/vulkan",
+      "dm/gfx/nvn/nvn_tex.c",
+      "dm/gfx/tex/nvn_deswizzle.c"
+    ]
   },
   "oboe": {
     "repository": "git@github.com:tencentmalos/oboe.git",
     "commit": "987538b6ec4cb9e699b117a890e686de7a9302fa"
+  },
+  "volk": {
+    "repository": "https://github.com/zeux/volk.git",
+    "commit": "0b17a763ba5643e32da1b2152f8140461b3b7345"
+  },
+  "adrenotools": {
+    "repository": "https://github.com/tencentmalos/libadrenotools.git",
+    "commit": "60ae5bbce9741d5db38c64670bbbf8e5828cabfb"
+  },
+  "fmt": {
+    "repository": "https://github.com/fmtlib/fmt",
+    "commit": "f5e54359df4c26b6230fc61d38aa294581393084"
+  },
+  "freetype": {
+    "repository": "https://github.com/freetype/freetype.git",
+    "commit": "b91f75bd02db43b06d634591eb286d3eb0ce3b65"
+  },
+  "imgui": {
+    "repository": "https://github.com/ocornut/imgui.git",
+    "commit": "45acd5e0e82f4c954432533ae9985ff0e1aad6d5",
+    "tag": "v1.92.2b"
   }
 }

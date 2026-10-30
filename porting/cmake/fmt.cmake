@@ -1,0 +1,17 @@
+include_guard(GLOBAL)
+if(NOT TARGET fmt::fmt)
+    if(NOT FMT_SOURCE_DIR)
+        get_filename_component(FMT_SOURCE_DIR "${FOUNDATION_SOURCE_DIR}/../fmt" ABSOLUTE)
+    endif()
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/../../android/dependencies.json" lock)
+    string(JSON expected GET "${lock}" fmt commit)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${FMT_SOURCE_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE actual OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE status)
+    if(NOT status EQUAL 0 OR NOT actual STREQUAL expected)
+        message(FATAL_ERROR "fmt source must match dependencies.json")
+    endif()
+    set(FMT_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${FMT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/fmt EXCLUDE_FROM_ALL)
+    # The pinned fmt release predates Clang 21 constant-evaluation rules.
+    target_compile_definitions(fmt PUBLIC FMT_CONSTEVAL=)
+endif()

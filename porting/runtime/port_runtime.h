@@ -9,6 +9,8 @@
 
 namespace mng::port {
 std::string sha256(std::span<const uint8_t> bytes);
+// Normal running-thread copy for capture identity. Never use in a signal handler.
+std::string debug_snapshot();
 struct Identity {
     std::string profile, platform, module, build_id, source_sha256, image_sha256;
 };

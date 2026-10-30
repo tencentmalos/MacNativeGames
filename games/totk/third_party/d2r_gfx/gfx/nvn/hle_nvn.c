@@ -25,6 +25,7 @@
 #include "nvn_tex.h"
 #include "nvn_hmap.h"
 #include "nvn_mtl.h"
+#include "nvn_profile.h"
 #include "nvn_pace.h"
 #include "nvn_diag_range.h"
 #include "../../host/front.h"
@@ -2158,6 +2159,7 @@ static int fence_wait(uint64_t k, uint64_t timeout_ns) {
 }
 
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
+    MNG_PROFILE_SCOPE("NVN.Submit");
     NVN_BLOCKING();
 #ifdef GAME_BOTW
     NVNcommandHandle mapped[64]; NVNcommandHandle *heap = n > 64 ? malloc(sizeof *heap * (size_t)n) : NULL;
@@ -2199,6 +2201,8 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
 #endif
 }
 static void submit_exec(int n, const uint64_t *h, void *ucap) {
+    MNG_PROFILE_SCOPE("NVN.Translate");
+    mng_profile_counter("NVN.Submission.Token", __atomic_load_n(&g_submits, __ATOMIC_RELAXED));
     gfx_enter();
     totk_tl(TL_REP_BEGIN, 0, 0);
     pin_step(__atomic_load_n(&g_submits, __ATOMIC_RELAXED));   /* TOTK: free texture copies no recording refers to any more */
@@ -2212,11 +2216,12 @@ static void submit_exec(int n, const uint64_t *h, void *ucap) {
     atomic_fetch_add(&dm_submit_busy, 1);
     { static int wl = -1; if (wl < 0) wl = getenv("TOTK_WATCH_ADDR") != NULL; if (wl) LOG("[sub] F%llu start t_us=%llu", (unsigned long long)g_frame_pub, (unsigned long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000)); }
     mtl_sub_begin();
-    mtl_sub_snapshot_ubos_cap((const uint64_t *)h, n, ucap);   // TOTK: uniforms as of the submit call (ucap: bytes captured there)
-    mtl_sub_index((const uint64_t *)h, n);
+    { MNG_PROFILE_SCOPE("Metal.UniformSnapshot"); mtl_sub_snapshot_ubos_cap((const uint64_t *)h, n, ucap); }   // TOTK: uniforms as of the submit call (ucap: bytes captured there)
+    { MNG_PROFILE_SCOPE("Metal.SubmissionIndex"); mtl_sub_index((const uint64_t *)h, n); }
+    { MNG_PROFILE_SCOPE("Metal.Replay");
     for (int i = 0; i < n; i++) { mtl_exec_rest((const uint64_t *)h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
-    mtl_exec_rest(NULL, 0);
-    mtl_sub_commit();
+    mtl_exec_rest(NULL, 0); }
+    { MNG_PROFILE_SCOPE("Metal.Commit"); mtl_sub_commit(); }
     atomic_fetch_sub(&dm_submit_busy, 1);
     { static int wl = -1; if (wl < 0) wl = getenv("TOTK_WATCH_ADDR") != NULL; if (wl) LOG("[sub] F%llu end t_us=%llu", (unsigned long long)g_frame_pub, (unsigned long long)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000)); }
     uint64_t dw = now_ns() - t0;

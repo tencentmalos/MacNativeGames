@@ -1,3 +1,7 @@
+#include "profiler.h"
+#include "profile_c.h"
+#include "guest_tags.h"
+#include "debugbus.h"
 // SPDX-License-Identifier: MIT
 // Android module loading and relocation follow games/totk/runtime/loader.c.
 // Bionic key discovery follows D2R Mobile 758f5d4, validated per process/thread.
@@ -5,6 +9,12 @@
 #include "expected_modules.h"
 #include "port_runtime.h"
 #include "guest_memory.h"
+#ifdef MNG_GAME_SERVICES
+#include "exclusive_acquire.h"
+#include "render_resolution.h"
+#include "realtime.h"
+#include "../../games/totk/runtime/system_mode.h"
+#endif
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -35,7 +45,22 @@ uint64_t mng_call_guest(void* function, uintptr_t stack, uint64_t argument);
 uint64_t mng_call_guest_startup(void* function, uintptr_t stack, const uint64_t* arguments);
 void mng_guest_loader_ready();
 #endif
+#ifdef MNG_STARTUP_PROBE
+extern uint64_t runtime_hle_tsd_off;
+pthread_key_t runtime_keys[8];
+uint32_t svc_thread_main_init();
+int svc_thread(int, uint64_t*);
+int runtime_ipc_svc(unsigned, uint64_t*);
+void runtime_core_checkpoint();
+void* runtime_hle_wrap_named(void*, const char*);
+void* runtime_hle_wrap_profile_marker(void*, const char*);
+uint32_t runtime_thread_current_handle();
+#ifdef MNG_GAME_SERVICES
+void* runtime_override(const char*);
+#endif
+#else
 __attribute__((visibility("hidden"))) uint64_t runtime_hle_tsd_off;
+#endif
 }
 namespace {
 using Json = nlohmann::json;
@@ -159,21 +184,25 @@ struct Symbol { std::string name; uint64_t value,size; unsigned defined,binding,
 struct Reloc { uint64_t where; unsigned kind,symbol; int64_t addend; };
 struct Gate { uint64_t ret; unsigned timer,arg; uint64_t original; };
 struct Module {
-    std::string name,build_id,source_sha256,image_sha256; size_t file_size{},text{},ro{},data{},key{},patch{};
+    std::string name,build_id,source_sha256,image_sha256; size_t file_size{},text{},ro{},data{},key{},patch{},timing{},tags{};
     std::unique_ptr<Mapping> mapping; std::vector<Symbol> symbols; std::vector<Reloc> relocs;
-    std::vector<Gate> gates; uint64_t relative{},symbolic{},cross{},weak{};
+    Json guest_patches=Json::array();
+    std::vector<Gate> gates; uint64_t relative{},symbolic{},cross{},weak{},init{},ctor_flag{},init_count{};
     uintptr_t address(uint64_t offset) const { require(offset<key,"Symbol outside module: "+name); return uintptr_t(mapping->base)+offset; }
 };
 struct Session;
-struct Worker { Session* session; uintptr_t host_begin,host_end; uint64_t calls{},sleeps{}; };
+struct Worker { Session* session; uintptr_t host_begin,host_end; uint64_t calls{},sleeps{},last_ret{}; const uint64_t* last_regs{}; };
 thread_local Worker* active_worker;
 #ifdef MNG_STARTUP_PROBE
-[[noreturn]] void startup_callback();
+void startup_callback();
+Session* startup_session;
 #endif
 struct Session {
     std::string title,manifest_hash;
     Keys keys;
     std::vector<Module> modules;
+    struct TagOwner { bool installed{}; ~TagOwner(){if(installed)mng_guest_tags_close();} } tag_owner;
+    std::unique_ptr<mng::botw::RealtimeSession> realtime;
     std::unordered_map<std::string,uintptr_t> exports;
     std::unordered_map<uintptr_t,Gate> gates;
     uint64_t plt{},slot{}; std::string clock_symbol;
@@ -188,17 +217,20 @@ struct Session {
         Json payload={{"schema_version",1},{"kind","mng-native-port"},{"profile",title},
             {"platform","android-arm64"},{"process_id",getpid()},{"generation",debug.generation()},
             {"phase",phase},{"manifest_sha256",manifest_hash},{"modules",Json::array()},{"detail",std::move(detail)}};
-        for(const auto& m:modules)payload["modules"].push_back({{"name",m.name},{"build_id",m.build_id},
+        for(const auto& m:modules)payload["modules"].push_back({{"module_index",&m-modules.data()},{"name",m.name},{"build_id",m.build_id},
             {"source_sha256",m.source_sha256},{"image_sha256",m.image_sha256},{"base",uintptr_t(m.mapping->base)},
-            {"size",m.mapping->size},{"text_size",m.text},{"patch_offset",m.patch}});
-        debug.publish(payload.dump());
+            {"size",m.mapping->size},{"text_size",m.text},{"patch_offset",m.patch},{"guest_patches",m.guest_patches}});
+        auto text=payload.dump();debug.publish(text);mng::diagnostics::setRuntime(std::move(text));
     }
 #ifdef MNG_STARTUP_PROBE
     std::string startup_symbol;
     std::array<uint64_t,4> startup_entropy{};
     // Initial guest main-thread policy, matching the existing native host.
-    // Only this registered thread exists during the isolated startup probe.
-    static constexpr uint32_t main_handle=0x100;
+    // Additional guest threads are registered as the SDK creates them.
+    uint32_t main_handle{};
+    std::mutex startup_mutex;
+    struct ThreadState { Mapping environment{16384,true}; Worker context{}; };
+    std::vector<std::unique_ptr<ThreadState>> thread_states;
     static constexpr uint32_t main_priority=44;
     static constexpr uint64_t main_core_mask=7;
     Json startup_services=Json::array();
@@ -206,7 +238,7 @@ struct Session {
         Json result=report("sdk_startup");
         result["status"]="blocked";result["reason"]=reason;result["entry_vendor_symbol"]=startup_symbol;
         result["completed_services"]=startup_services;
-        result["scope"]="Isolated SDK startup probe; no constructor, nnMain or graphics execution";
+        result["scope"]="Native SDK startup; completed stage is recorded separately; no gameplay success implied";
         if (ret) {
             for(const auto& m:modules)for(const auto& gate:m.gates)if(uintptr_t(m.mapping->base)+gate.ret==ret) {
                 Json location={{"module",m.name},{"build_id",m.build_id},{"module_offset",gate.original},
@@ -226,11 +258,13 @@ struct Session {
         publish_debug("startup_blocked",result);
         const auto text=result.dump()+"\n";
         size_t done=0;while(done<text.size()) {const auto n=write(STDOUT_FILENO,text.data()+done,text.size()-done);if(n<0&&errno==EINTR)continue;if(n<=0)break;done+=size_t(n);}
-        // This path exists only in the standalone executable. The OS reclaims
-        // all guest mappings; unwinding across guest assembly is unnecessary.
+        // Both the standalone probe and the APK's dedicated :game process own
+        // their guest mappings. Never unwind C++ through guest assembly.
         _exit(3);
     }
     [[noreturn]] void startup() {
+        startup_session=this;
+        for(size_t i=0;i<8;++i)runtime_keys[i]=keys.keys[i];
         startup_symbol=title=="botw160"?"_ZN2nn4init5StartEmmPFvvES2_":"_ZN2nn4init5StartEmmPFvvES2_S2_";
         const auto entry=exports.find(startup_symbol);require(entry!=exports.end(),"Original SDK Start export missing");
         arc4random_buf(startup_entropy.data(),sizeof(startup_entropy));
@@ -246,7 +280,9 @@ struct Session {
             if(m.key>ro_end)memory->register_mapping(base+ro_end,m.key-ro_end,4,3);
             memory->register_mapping(base+m.key,16384,4,1);
             if(m.patch>m.key+16384)memory->register_mapping(base+m.key+16384,m.patch-m.key-16384,4,3);
-            memory->register_mapping(base+m.patch,m.mapping->size-m.patch,3,5);
+            memory->register_mapping(base+m.patch,(m.timing?m.timing:(m.tags?m.tags:m.mapping->size))-m.patch,3,5);
+            if(m.tags)memory->register_mapping(base+m.tags,16384,3,5);
+            if(m.timing)memory->register_mapping(base+m.timing,16384,4,3);
         }
         memory->register_mapping(uintptr_t(guest.base)+page_size(),guest.size-2*page_size(),0xb,3);
         memory->register_mapping(uintptr_t(environment.base),environment.size,0xc,3);
@@ -258,7 +294,8 @@ struct Session {
             {"guest_stack_high",uintptr_t(guest.base)+guest.size-page_size()},{"guest_tls",uintptr_t(environment.base)},
             {"guest_tlr",uintptr_t(environment.base)+8192},{"guest_x18_slot",tsd_base()+keys.offsets[0]},
             {"platform_x18",platform_x18()},{"entry_vendor_symbol",startup_symbol}});
-        const uint64_t callback=reinterpret_cast<uintptr_t>(startup_callback);
+        main_handle=svc_thread_main_init();
+        const uint64_t callback=reinterpret_cast<uintptr_t>(runtime_hle_wrap_named(reinterpret_cast<void*>(startup_callback),"module_initializers"));
         const std::array<uint64_t,8> args={main_handle,0,reinterpret_cast<uintptr_t>(mng_guest_loader_ready),callback,callback,0,0,0};
         mng_call_guest_startup(reinterpret_cast<void*>(entry->second),uintptr_t(guest.base)+guest.size-page_size()-64,args.data());
         stop_startup("SDK Start unexpectedly returned");
@@ -291,8 +328,67 @@ struct Session {
             for(size_t k=0;k<key_names.size();++k)require(l.at(key_names[k])==k,"Unsupported key-page ABI");
             require(j.at("file")==m.name+".patched.bin","Unexpected module filename");
             File file(directory+"/"+m.name+".patched.bin",512u<<20);require(file.size==m.file_size,"Module size mismatch");
-            m.mapping=std::make_unique<Mapping>(m.file_size,true);file.read_all(m.mapping->base);
+            #ifdef MNG_GAME_SERVICES
+            if(title=="botw160" && m.name=="main" && !(getenv("MNG_REALTIME") && !strcmp(getenv("MNG_REALTIME"),"0")))
+                m.timing=(m.file_size+0x3fff)&~size_t(0x3fff);
+#endif
+#ifdef MNG_GAME_SERVICES
+            if(title=="botw160" && m.name=="main" && mng_guest_tags_requested())
+                m.tags=((m.file_size+0x3fff)&~size_t(0x3fff))+(m.timing?16384:0);
+#endif
+            m.mapping=std::make_unique<Mapping>(m.tags?m.tags+16384:(m.timing?m.timing+16384:m.file_size),true);file.read_all(m.mapping->base);
             require(sha256(m.mapping->base,m.file_size)==j.at("sha256").get<std::string>(),"Rewritten module SHA-256 mismatch: "+m.name);
+#ifdef MNG_GAME_SERVICES
+            if(title=="botw160" && m.name=="main") {
+                const auto receipt=mng::botw::apply_exclusive_acquire({m.mapping->base,m.file_size},
+                    {title,"android-arm64",m.name,m.build_id,m.source_sha256,m.image_sha256},m.text,m.patch);
+                m.guest_patches.push_back({{"id","botw160.exclusive-acquire"},{"sites",receipt.applied.size()},
+                    {"input_sha256",receipt.input_sha256},{"output_sha256",receipt.output_sha256},
+                    {"stage","private_rw_before_relocation"}});
+                fprintf(stderr,"[botw] exclusive-acquire: %zu sites, output %s\n",
+                    receipt.applied.size(),receipt.output_sha256.c_str());
+                auto timing_input=receipt.output_sha256;
+                if(runtime_system_mode()->height==1080) {
+                    const auto feature=mng::botw::apply_render_1080({m.mapping->base,m.file_size},
+                        {title,"android-arm64",m.name,m.build_id,m.source_sha256,receipt.output_sha256});
+                    m.guest_patches.push_back({{"id","botw160.render-1080"},{"sites",feature.applied.size()},
+                        {"input_sha256",feature.input_sha256},{"output_sha256",feature.output_sha256},
+                        {"stage","private_rw_before_relocation"}});
+                    timing_input=feature.output_sha256;
+                    fprintf(stderr,"[botw] render resolution 1920x1080 internal_scale=1 output=%s\n",feature.output_sha256.c_str());
+                }
+                if(m.timing) {
+                    const auto timing=mng::botw::apply_realtime({m.mapping->base,m.file_size},
+                        {title,"android-arm64",m.name,m.build_id,m.source_sha256,timing_input},m.timing);
+                    m.guest_patches.push_back({{"id","botw160.realtime-vfr+pad-repeat+movie-pacing"},
+                        {"sites",timing.applied.size()},{"input_sha256",timing.input_sha256},
+                        {"output_sha256",timing.output_sha256},{"page_offset",m.timing},
+                        {"stage","private_rw_before_relocation"}});
+                    fprintf(stderr,"[botw] realtime 60fps: %zu guarded sites page=%zx output=%s\n",
+                        timing.applied.size(),m.timing,timing.output_sha256.c_str());
+                }
+            }
+#endif
+#ifdef MNG_STARTUP_PROBE
+            auto u32=[&](uint64_t off){require(off<=m.key-4,"Initializer metadata bounds");uint32_t v;memcpy(&v,m.mapping->base+off,4);return v;};
+            auto u64=[&](uint64_t off){require(off<=m.key-8,"Initializer metadata bounds");uint64_t v;memcpy(&v,m.mapping->base+off,8);return v;};
+            const auto mod=u32(4);require(u32(mod)==0x30444f4d,"Invalid initializer MOD0");
+            const uint64_t dynamic=uint64_t(int64_t(mod)+int32_t(u32(mod+4)));
+            bool ended=false;
+            for(uint64_t at=dynamic;at<dynamic+65536;at+=16) {
+                const auto tag=u64(at),value=u64(at+8);
+                if(!tag){ended=true;break;}
+                if(tag==12)m.init=value;
+                if(tag==27){require(value%8==0,"Initializer array size");m.init_count=value/8;}
+            }
+            require(ended && m.init%4==0 && m.init+28<m.text,"Invalid initializer dynamic entry");
+            const unsigned reg=title=="botw160"?19:20,load=title=="botw160"?20:24;
+            const auto a=u32(m.init+16),b=u32(m.init+load);
+            require((a&0x9f00001f)==(0x90000000|reg)&&(b&0xffc003ff)==(0xb9400008|(reg<<5)),"Unknown initializer state pattern");
+            int64_t immediate=((a>>29)&3)|(((a>>5)&0x7ffff)<<2);immediate=(immediate^(1<<20))-(1<<20);
+            m.ctor_flag=(m.init+16&~4095ull)+immediate*4096+((b>>10)&0xfff)*4;
+            require(m.ctor_flag>=m.data&&m.ctor_flag<=m.key-4,"Initializer state outside data");
+#endif
             require(j.at("symbols").is_array() && j.at("symbols").size()<=1000000,"Invalid symbol count");
             for(const auto& s:j.at("symbols")) {
                 require(s.is_array() && s.size()==6,"Invalid symbol record");
@@ -330,6 +426,10 @@ struct Session {
             if(r.kind==1027) {value=m.address(r.addend);++m.relative;}
             else {
                 const auto& symbol=m.symbols.at(r.symbol);
+#ifdef MNG_GAME_SERVICES
+                if(auto host=runtime_override(symbol.name.c_str()))value=reinterpret_cast<uintptr_t>(runtime_hle_wrap_named(host,symbol.name.c_str()));
+                else
+#endif
                 if(symbol.defined)value=m.address(symbol.value);
                 else if(auto it=exports.find(symbol.name);it!=exports.end()){value=it->second;++m.cross;}
                 else {require(symbol.binding==2,"Unresolved strong import: "+m.name+":"+symbol.name);++m.weak;}
@@ -344,7 +444,19 @@ struct Session {
         int64_t imm=((words[0]>>29)&3)|(((words[0]>>5)&0x7ffff)<<2);imm=(imm^(1<<20))-(1<<20);
         require((words[0]&0x9f00001f)==0x90000010 && (words[1]&0xffc003ff)==0xf9400211 && words[3]==0xd61f0220 && int64_t(plt&~4095ull)+imm*4096+((words[1]>>10)&0xfff)*8==int64_t(slot),"Original PLT pattern mismatch");
         runtime_hle_tsd_off=keys.offsets[8];
+#ifdef MNG_GAME_SERVICES
+        for(auto& m:modules)if(m.tags){
+            if(!mng_guest_tags_install(m.mapping->base,m.file_size,m.tags,m.mapping->size,
+                m.build_id.c_str(),m.source_sha256.c_str(),runtime_hle_wrap_profile_marker,runtime_thread_current_handle))
+                throw std::runtime_error(mng_guest_tags_error());
+            tag_owner.installed=true;
+            m.guest_patches.push_back({{"id","botw160.performance-tags-v1"},{"sites",12},{"page_offset",m.tags},
+                {"stage","private_rw_after_relocation"},{"default_active",false}});
+            fprintf(stderr,"[botw] guest performance tags: 12 guarded sites page=%zx active=0\n",m.tags);
+        }
+#endif
         for(auto& m:modules) seal(m);
+        for(auto& m:modules)if(m.timing)realtime=std::make_unique<mng::botw::RealtimeSession>(m.mapping->base,m.timing);
         publish_debug("modules_sealed");
     }
     void seal(Module& m) {
@@ -352,12 +464,13 @@ struct Session {
         m.mapping->protect(0,text_end,PROT_READ|PROT_EXEC);
         m.mapping->protect(text_end,ro_end-text_end,PROT_READ);
         m.mapping->protect(m.key,16384,PROT_READ);
-        m.mapping->protect(m.patch,m.mapping->size-m.patch,PROT_READ|PROT_EXEC);
+        m.mapping->protect(m.patch,(m.timing?m.timing:(m.tags?m.tags:m.mapping->size))-m.patch,PROT_READ|PROT_EXEC);
+        if(m.tags)m.mapping->protect(m.tags,16384,PROT_READ|PROT_EXEC);
         __builtin___clear_cache(reinterpret_cast<char*>(m.mapping->base),reinterpret_cast<char*>(m.mapping->base+m.mapping->size));
         const auto maps=regions();
         for(size_t at=0;at<m.mapping->size;at+=page_size()) {
             const auto address=uintptr_t(m.mapping->base)+at;
-            const int expected=at<text_end||at>=m.patch?PROT_READ|PROT_EXEC:
+            const int expected=at<text_end||(m.tags && at>=m.tags)||(at>=m.patch && (!m.timing || at<m.timing))?PROT_READ|PROT_EXEC:
                 (at<ro_end||(at>=m.key&&at<m.key+16384))?PROT_READ:PROT_READ|PROT_WRITE;
             const auto r=std::find_if(maps.begin(),maps.end(),[&](auto& v){return address>=v.start&&address+page_size()<=v.end;});
             require(r!=maps.end() && r->protection==expected,"Module mapping permissions mismatch");
@@ -397,7 +510,7 @@ struct Session {
             {"heap_base",memory->heap()},{"heap_size",memory->heap_size()},
             {"alias_base",memory->alias()},{"alias_bytes",memory->alias_bytes()},
             {"pool_size",*memory->info(6)},{"used_size",*memory->info(7)}};
-        for(const auto& m:modules)result["modules"].push_back({{"name",m.name},{"build_id",m.build_id},{"base",uintptr_t(m.mapping->base)},{"relative",m.relative},{"symbolic",m.symbolic},{"cross",m.cross},{"weak_zero",m.weak}});
+        for(const auto& m:modules)result["modules"].push_back({{"name",m.name},{"build_id",m.build_id},{"base",uintptr_t(m.mapping->base)},{"relative",m.relative},{"symbolic",m.symbolic},{"cross",m.cross},{"weak_zero",m.weak},{"guest_patches",m.guest_patches}});
         return result;
     }
     Json run() {
@@ -412,11 +525,87 @@ struct Session {
 };
 std::mutex execution_mutex;
 #ifdef MNG_STARTUP_PROBE
-[[noreturn]] void startup_callback() {
-    active_worker->session->stop_startup("SDK reached its module-constructor callback; module initialization is not connected");
+void startup_callback() {
+    auto& s=*active_worker->session;
+    s.publish_debug("module_initializers");
+    for(auto& m:s.modules) {
+        require(m.init && m.ctor_flag,"Missing verified module initializer");
+        fprintf(stderr,"[android-boot] ENTER %s DT_INIT +%#llx\n",m.name.c_str(),(unsigned long long)m.init);
+        // A nested guest call gets a low address guest stack and a separate
+        // host stack. Do not put HIPC stack pointers above the guest VA limit.
+        Mapping guest(2u<<20,true),host(2u<<20);
+        s.memory->register_mapping(uintptr_t(guest.base),guest.size,0xb,3);
+        Worker nested{&s,uintptr_t(host.base),uintptr_t(host.base)+host.size};
+        auto* previous=active_worker;auto* slot=s.keys.get(8);
+        active_worker=&nested;s.keys.set(8,reinterpret_cast<void*>(nested.host_end-64));
+        const std::array<uint64_t,8> args{};
+        mng_call_guest_startup(reinterpret_cast<void*>(m.address(m.init)),uintptr_t(guest.base)+guest.size-64,args.data());
+        s.keys.set(8,slot);active_worker=previous;
+        s.memory->unregister_mapping(uintptr_t(guest.base),guest.size);
+        uint32_t state;memcpy(&state,reinterpret_cast<void*>(m.address(m.ctor_flag)),4);
+        require(state==2,"Module constructors did not finish");
+        fprintf(stderr,"[android-boot] RETURN %s DT_INIT state=%u count=%llu\n",m.name.c_str(),state,(unsigned long long)m.init_count);
+    }
+    s.publish_debug("module_initializers_complete");
 }
 #endif
 }
+#ifdef MNG_STARTUP_PROBE
+extern "C" int mng_guest_memory_writable(uint64_t address,size_t bytes) {
+    return startup_session && startup_session->memory && startup_session->memory->accessible(address,bytes,3);
+}
+extern "C" [[noreturn]] void runtime_fail(const char* reason) {
+    if(active_worker) active_worker->session->stop_startup(reason);
+    fprintf(stderr,"[android-native] %s\n",reason);_exit(3);
+}
+extern "C" uint64_t runtime_invoke_guest(void* function,const uint64_t* arguments,uint32_t count) {
+    spatial::LiteTraceScope callback_scope("HLE.GuestCallback");
+    if(!active_worker||count>8)runtime_fail("Invalid nested guest callback");
+    auto& s=*active_worker->session;Mapping guest(2u<<20,true),host(2u<<20);
+    s.memory->register_mapping(uintptr_t(guest.base),guest.size,0xb,3);
+    Worker nested{&s,uintptr_t(host.base),uintptr_t(host.base)+host.size};
+    auto* previous=active_worker;auto* slot=s.keys.get(8);active_worker=&nested;
+    s.keys.set(8,reinterpret_cast<void*>(nested.host_end-64));
+    std::array<uint64_t,8> args{};std::copy_n(arguments,count,args.begin());
+    const auto result=mng_call_guest_startup(function,uintptr_t(guest.base)+guest.size-64,args.data());
+    s.keys.set(8,slot);active_worker=previous;s.memory->unregister_mapping(uintptr_t(guest.base),guest.size);
+    return result;
+}
+extern "C" uint64_t runtime_now_ns() { return now_ns(); }
+extern "C" void* runtime_symbol(const char* name) {
+    auto it=startup_session->exports.find(name);
+    if(it==startup_session->exports.end())runtime_fail((std::string("Missing guest export: ")+name).c_str());
+    return reinterpret_cast<void*>(it->second);
+}
+extern "C" int runtime_guest_code_pc(uint64_t pc) {
+    for(const auto& m:startup_session->modules)if(pc>=uintptr_t(m.mapping->base)&&pc-uintptr_t(m.mapping->base)<m.text)return 1;
+    return 0;
+}
+extern "C" void runtime_trace_guest(uint64_t fp,uint64_t lr) {
+    for(unsigned i=0;i<20;++i) {
+        bool found=false;
+        for(const auto& m:startup_session->modules)if(lr>=uintptr_t(m.mapping->base)&&lr-uintptr_t(m.mapping->base)<m.mapping->size) {
+            fprintf(stderr,"[guest] %s+%#llx\n",m.name.c_str(),(unsigned long long)(lr-uintptr_t(m.mapping->base)));found=true;break;
+        }
+        if(!found)fprintf(stderr,"[guest] host/unknown %#llx\n",(unsigned long long)lr);
+        if(fp%16||!startup_session->memory->accessible(fp,16,1))break;
+        uint64_t next[2];memcpy(next,reinterpret_cast<void*>(fp),16);if(next[0]==fp)break;fp=next[0];lr=next[1];
+    }
+}
+extern "C" void runtime_thread_init() {
+    auto& s=*startup_session;
+    auto state=std::make_unique<Session::ThreadState>();
+    pthread_attr_t attr;pthread_getattr_np(pthread_self(),&attr);
+    void* base;size_t size;pthread_attr_getstack(&attr,&base,&size);pthread_attr_destroy(&attr);
+    state->context={&s,uintptr_t(base),uintptr_t(base)+size};
+    active_worker=&state->context;
+    s.keys.set(0,nullptr);s.keys.set(1,state->environment.base);s.keys.set(2,state->environment.base+8192);
+    s.keys.set(3,reinterpret_cast<void*>(runtime_gate));
+    s.memory->register_mapping(uintptr_t(state->environment.base),state->environment.size,0xc,3);
+    for(size_t i=0;i<4;++i)s.keys.check(i);
+    std::lock_guard lock(s.startup_mutex);s.thread_states.push_back(std::move(state));
+}
+#endif
 extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t ret,uint64_t* regs) {
     // The application supports timer and positive SleepThread gates. The
     // standalone startup probe adds only explicitly implemented bootstrap SVCs.
@@ -429,14 +618,56 @@ extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t 
     if(g==s.gates.end()) {fprintf(stderr,"Unknown guest gate at %#llx\n",(unsigned long long)ret);abort();}
 #ifdef MNG_STARTUP_PROBE
     if(!s.startup_symbol.empty() && !g->second.timer && s.memory) {
+        w->last_ret=ret;w->last_regs=regs;
         const auto svc=g->second.arg;
+        spatial::LiteTraceScope svc_scope(mng::profile::svcName(svc));
+        spatial::LiteTraceScope guest_scope;
+        if(mng_profile_guest_svc(svc) && mng_profile_guest_epoch()){
+            guest_scope.begin("Guest.PatchedSVC");
+            spatial::LiteTrace::counter("Guest.SVC",svc);
+            for(size_t i=0;i<s.modules.size();++i){const auto &m=s.modules[i];
+                const auto base=uintptr_t(m.mapping->base);
+                if(ret>=base && ret-base<m.mapping->size){
+                    spatial::LiteTrace::counter("Guest.Site.Module",i);
+                    spatial::LiteTrace::counter("Guest.Site.Offset",g->second.original);break;}}
+            // The gate's saved x30 is its own trampoline return, not a Guest caller.
+            // Report bounded frame-record return addresses, without naming callees.
+            static const char* module_names[]={"Guest.Return0.Module","Guest.Return1.Module","Guest.Return2.Module","Guest.Return3.Module"};
+            static const char* offset_names[]={"Guest.Return0.Offset","Guest.Return1.Offset","Guest.Return2.Offset","Guest.Return3.Offset"};
+            auto fp=regs[29];
+            for(unsigned depth=0;depth<4;++depth){
+                int module=-1;uint64_t offset=0,frame[2]{};
+                const bool readable=fp && !(fp&15) && s.memory && s.memory->accessible(fp,16,1);
+                if(readable){memcpy(frame,reinterpret_cast<const void*>(fp),16);
+                    for(size_t i=0;i<s.modules.size();++i){const auto &m=s.modules[i];const auto base=uintptr_t(m.mapping->base);
+                        if(frame[1]>=base && frame[1]-base<m.text){module=int(i);offset=frame[1]-base;break;}}}
+                spatial::LiteTrace::counter(module_names[depth],module);
+                spatial::LiteTrace::counter(offset_names[depth],offset);
+                fp=readable && frame[0]>fp && frame[0]-fp<=(1u<<20)?frame[0]:0;
+            }
+        }
         bool handled=false;
         Json detail={{"svc",svc}};
         try {
             if(svc==0x29) {
-                if(auto value=s.memory->info(uint32_t(regs[1]))) {
+                auto value=s.memory->info(uint32_t(regs[1]));
+                if(!value) switch(uint32_t(regs[1])) {
+                    case 0: value=7;break;
+                    case 1: value=0x0ffffffff0000000ull;break;
+                    case 8: case 10: case 28: value=0;break;
+                    case 16: value=32ull<<20;break;
+                    // This host has no Horizon kernel page tables charged to
+                    // the title's system resource pool.
+                    case 17: value=0;break;
+                    case 18: value=0x01007ef00011e000ull;break;
+                    case 20: value=uintptr_t(s.keys.get(2))+4096;break;
+                    case 23: value=1;break;
+                }
+                if(value) {
                     detail["info_id"]=regs[1];detail["sub_id"]=regs[3];
-                    if(uint32_t(regs[2])!=0xffff8001u)regs[0]=(114u<<9)|1;
+                    // IsDebuggerAttached is a system-wide query and takes an invalid handle.
+                    const bool system_query=uint32_t(regs[1])==8 || uint32_t(regs[1])==10;
+                    if(uint32_t(regs[2])!=(system_query?0u:0xffff8001u))regs[0]=(114u<<9)|1;
                     else if(regs[3])regs[0]=(14u<<9)|1;
                     else {regs[0]=0;regs[1]=*value;}
                     handled=true;
@@ -458,21 +689,22 @@ extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t 
             } else if(svc==0x2c || svc==0x2d) {
                 detail["address"]=regs[0];detail["size"]=regs[1];
                 regs[0]=s.memory->map_physical(regs[0],regs[1],svc==0x2d);handled=true;
-            } else if(svc==0x0c || svc==0x0e || svc==0x25) {
-                detail["thread_handle"]=regs[1];
-                if(regs[1]!=Session::main_handle && regs[1]!=0xffff8000u)regs[0]=(114u<<9)|1;
-                else {
-                    regs[0]=0;
-                    if(svc==0x0c)regs[1]=Session::main_priority;
-                    else if(svc==0x0e){regs[1]=0;regs[2]=Session::main_core_mask;}
-                    else regs[1]=uint64_t(gettid());
-                }
-                handled=true;
+            } else if(svc==0x27) {
+                require(regs[1]<=65536 && s.memory->accessible(regs[0],regs[1],1),"Invalid guest debug string");
+                fwrite(reinterpret_cast<const void*>(regs[0]),1,size_t(regs[1]),stderr);regs[0]=0;handled=true;
+            } else if(svc==0x26) {
+                if(regs[0]&0x80000000ull){regs[0]=0;handled=true;}
+                else s.stop_startup("Original SDK Break",ret,regs);
+            } else if(svc_thread(int(svc),regs) || runtime_ipc_svc(svc,regs)) {
+                runtime_core_checkpoint(); handled=true;
             }
+
         } catch(const std::exception& e) {s.stop_startup(std::string("Guest memory host failure: ")+e.what(),ret,regs);}
         if(handled) {
-            if(s.startup_services.size()>=256)s.stop_startup("Startup service-call budget exceeded",ret,regs);
-            detail["result"]=regs[0];s.startup_services.push_back(std::move(detail));return;
+
+            spatial::LiteTraceScope bookkeeping_scope("HLE.SVC.RecordDiagnostic");
+            std::lock_guard log_lock(s.startup_mutex);
+            detail["result"]=regs[0];if(s.startup_services.size()<4096)s.startup_services.push_back(std::move(detail));return;
         }
     }
     if(!s.startup_symbol.empty() && !g->second.timer && g->second.arg==0x29 &&
@@ -480,15 +712,16 @@ extern "C" __attribute__((visibility("hidden"))) void runtime_dispatch(uint64_t 
         // Existing services.c identifies this query as RandomEntropy. Keep
         // four process-scoped words, supplied by Bionic's system random source.
         // Never publish those values in the diagnostic report.
-        if(s.startup_services.size()>=256)s.stop_startup("Startup service-call budget exceeded",ret,regs);
-        s.startup_services.push_back({{"svc",0x29},{"info_id",11},{"sub_id",regs[3]}});
+        std::lock_guard log_lock(s.startup_mutex);
+        if(s.startup_services.size()<4096)s.startup_services.push_back({{"svc",0x29},{"info_id",11},{"sub_id",regs[3]}});
         regs[1]=s.startup_entropy[regs[3]];regs[0]=0;return;
     }
 #endif
     if(g->second.timer) {
 #ifdef MNG_STARTUP_PROBE
-        if(!s.startup_symbol.empty() && w->calls>=10000)s.stop_startup("Startup timer-call budget exceeded",ret,regs);
+
 #endif
+        spatial::LiteTraceScope timer_scope;if(mng::profile::detailedCpu())timer_scope.begin("HLE.CounterRead");
         regs[g->second.arg]=uint64_t((__uint128_t(now_ns())*12)/625);
         ++w->calls;s.calls.fetch_add(1,std::memory_order_relaxed);
     } else if(g->second.arg==0x0b && regs[0]>0 && regs[0]<=1000000000) {

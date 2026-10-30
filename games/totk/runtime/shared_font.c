@@ -3,7 +3,7 @@
    service-provided offset to the shared memory base; the size is the decoded font size. */
 #include "runtime.h"
 #include "shared_fonts_config.h"
-#include <CommonCrypto/CommonDigest.h>
+#include "platform_digest.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>

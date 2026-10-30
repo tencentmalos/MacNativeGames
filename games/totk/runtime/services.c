@@ -1,11 +1,18 @@
 /* Horizon services reached by the current TOTK startup. Unknown operations fail. */
 #include "runtime.h"
+#include "system_mode.h"
+#ifndef __ANDROID__
 #include <TargetConditionals.h>
+#endif
 #include "ipc.h"
+#ifndef __ANDROID__
 #include <mach/mach.h>
 #include "mach_vm_compat.h"
+#endif
 #include <stdio.h>
+#ifndef __ANDROID__
 #include <CoreFoundation/CoreFoundation.h>
+#endif
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <ctype.h>
@@ -14,6 +21,7 @@
 
 #include <time.h>
 #include <unistd.h>
+#ifndef __ANDROID__
 #include <mach/mach_time.h>
 /* Guest address layout. The SDK encodes IPC buffer addresses with 39 bits (HIPC descriptor bits 36..38),
    so all guest memory must lie below 2^39. Darwin arm64 keeps 0x10_0000_0000..0x70_0000_0000 reserved,
@@ -233,8 +241,9 @@ void runtime_guest_resident(uint64_t *resident,uint64_t *dirty,uint64_t *compres
  region_pages((uintptr_t)low_space,(uintptr_t)low_space+LOW_SIZE,resident,dirty,compressed);
  region_pages(ALIAS_START,ALIAS_START+ALIAS_SIZE,resident,dirty,compressed);
 }
+#endif /* Darwin memory services; Android uses GuestMemory. */
 static void host_diag_init(void) { fprintf(stderr,"[totk] native diagnostics initialized\n"); }
-static void host_oe_init(void) { fprintf(stderr,"[totk] application environment: local macOS process\n"); }
+static void host_oe_init(void) { fprintf(stderr,"[totk] application environment: local native process\n"); }
 #ifdef GAME_BOTW
 void runtime_aoc_announce(void); int runtime_aoc_count(void); int runtime_aoc_list(int *out,int offset,int count);   /* aoc_romfs.c */
 static void host_aoc_init(void) { runtime_aoc_announce(); }   /* aoc_romfs.c: the DLC volumes (botw.md) */
@@ -253,21 +262,55 @@ static void host_error_init(void) { fprintf(stderr,"[totk] error contexts: local
 static void host_fs_init(void) { runtime_fs_init(); }
 static void host_pctl_init(void) { fprintf(stderr,"[totk] local application parental controls initialized\n"); }
 static void host_abort_init(void) { fprintf(stderr,"[totk] native crash observer initialized\n"); }
+#ifndef __ANDROID__
 static void observed_os_init(uint64_t h,uint64_t args) {
  fprintf(stderr,"[totk] ENTER nnosInitialize\n");((void(*)(uint64_t,uint64_t))runtime_symbol("nnosInitialize"))(h,args);fprintf(stderr,"[totk] RETURN nnosInitialize\n");
 }
 static void observed_sdk_init(void) { fprintf(stderr,"[totk] ENTER nninitInitializeSdkModule\n");((void(*)(void))runtime_symbol("nninitInitializeSdkModule"))();fprintf(stderr,"[totk] RETURN nninitInitializeSdkModule\n"); }
 static void observed_startup(void) { fprintf(stderr,"[totk] ENTER nninitStartup\n");((void(*)(void))runtime_symbol("nninitStartup"))();fprintf(stderr,"[totk] RETURN nninitStartup\n"); }
 static void observed_main(void) { fprintf(stderr,"[totk] ENTER nnMain\n");((void(*)(void))runtime_symbol("nnMain"))();fprintf(stderr,"[totk] RETURN nnMain\n"); }
-static void cpu_boost(int mode) { if(mode<0||mode>2)runtime_fail("unknown CPU boost mode");fprintf(stderr,"[totk] CPU boost request %d: macOS manages CPU frequency\n",mode); }
-/* TOTK_OPERATION_MODE=handheld reports the Switch handheld mode (oe OperationMode 0, PerformanceMode Normal 0) instead of
-   docked (1, Boost 1): the game then uses its own handheld settings (1280x720 output, lower internal resolution), which
-   Nintendo made for half the docked GPU clock. Read once; any other value stops the start. */
-static int handheld_mode(void) {static int v=-1;if(v<0){const char *e=getenv("TOTK_OPERATION_MODE");int h;if(!e||!strcmp(e,"docked"))h=0;else if(!strcmp(e,"handheld"))h=1;else runtime_fail("TOTK_OPERATION_MODE must be docked or handheld");
- fprintf(stderr,"[totk] operation mode reported to the game: %s\n",h?"handheld (performance normal)":"docked (performance boost)");v=h;}return v;}
-int runtime_handheld_mode(void){return handheld_mode();}   /* runtime/input.c: the pad is the handheld controller then */
-static int operation_mode(void) {return handheld_mode()?0:1;}
-static int performance_mode(void) {return handheld_mode()?0:1;}
+#endif
+static void cpu_boost(int mode) { if(mode<0||mode>2)runtime_fail("unknown CPU boost mode");fprintf(stderr,"[totk] CPU boost request %d: host manages CPU frequency\n",mode); }
+static RuntimeSystemMode system_mode;
+static pthread_once_t system_mode_once = PTHREAD_ONCE_INIT;
+static atomic_uint system_mode_ready, operation_queries, performance_queries;
+static void initialize_system_mode(void) {
+#ifdef __ANDROID__
+ const int default_handheld = 1;
+#else
+ const int default_handheld = 0;
+#endif
+ if (!runtime_parse_system_mode(getenv("TOTK_OPERATION_MODE"), getenv("MNG_RENDER_RESOLUTION"),
+                                default_handheld, &system_mode))
+  runtime_fail("Inconsistent system mode: handheld requires 720p; docked requires 1080p");
+ fprintf(stderr,"[totk] system mode=%s operation=%d performance=%d nominal_output=%dx%d\n",
+         system_mode.name,system_mode.operation,system_mode.performance,system_mode.width,system_mode.height);
+ atomic_store_explicit(&system_mode_ready,1,memory_order_release);
+}
+const RuntimeSystemMode *runtime_system_mode(void) {
+ pthread_once(&system_mode_once,initialize_system_mode);return &system_mode;
+}
+int runtime_handheld_mode(void){return runtime_system_mode()->operation==0;}
+static int operation_mode(void) {
+ int value=runtime_system_mode()->operation;
+ if(!atomic_fetch_add_explicit(&operation_queries,1,memory_order_relaxed))
+  fprintf(stderr,"[totk] guest GetOperationMode -> %d (%s)\n",value,system_mode.name);
+ return value;
+}
+static int performance_mode(void) {
+ int value=runtime_system_mode()->performance;
+ if(!atomic_fetch_add_explicit(&performance_queries,1,memory_order_relaxed))
+  fprintf(stderr,"[totk] guest GetPerformanceMode -> %d\n",value);
+ return value;
+}
+int runtime_system_mode_snapshot(char *out,unsigned bytes) {
+ // Service.dump must not run initialization or wait on a Guest/runtime lock.
+ if(!atomic_load_explicit(&system_mode_ready,memory_order_acquire))
+  return snprintf(out,bytes,"error=system_mode_not_initialized\n");
+ return snprintf(out,bytes,"schema=mng.system-mode.v1\nmode=%s\noperation_mode=%d\nperformance_mode=%d\nnominal_width=%d\nnominal_height=%d\ninternal_scale=1\nguest_dynamic_resolution=unmodified\noperation_queries=%u\nperformance_queries=%u\n",
+                 system_mode.name,system_mode.operation,system_mode.performance,system_mode.width,system_mode.height,
+                 atomic_load_explicit(&operation_queries,memory_order_relaxed),atomic_load_explicit(&performance_queries,memory_order_relaxed));
+}
 static int focus_policy;
 static void focus_mode(int mode) {if(mode<0||mode>3)runtime_fail("unknown focus handling mode");focus_policy=mode;runtime_startup_checkpoint((uintptr_t)__builtin_return_address(0));fprintf(stderr,"[totk] focus policy stored: %d (window lifecycle pending)\n",focus_policy);}
 static int focus_state(void) {return runtime_front_focus();}
@@ -276,7 +319,7 @@ static void resume_enabled(unsigned value) {resume_notification=value&255;}
 static void operation_enabled(unsigned value) {operation_notification=value&255;}
 static void performance_enabled(unsigned value) {performance_notification=value&255;}
 static uint32_t performance_configuration[2];
-static void performance_config(int mode,int cfg) {if(mode<0||mode>1)runtime_fail("invalid performance mode");performance_configuration[mode]=(uint32_t)cfg;fprintf(stderr,"[totk] performance request mode=%d cfg=%x: native macOS scheduling\n",mode,(uint32_t)cfg);}
+static void performance_config(int mode,int cfg) {if(mode<0||mode>1)runtime_fail("invalid performance mode");performance_configuration[mode]=(uint32_t)cfg;fprintf(stderr,"[totk] performance request mode=%d cfg=%x: native host scheduling\n",mode,(uint32_t)cfg);}
 /* The game's language: TOTK_LANG as given (a Switch language code), otherwise from a locale: TOTK_LOCALE, which the
    launcher sets to the app's first preferred language (BCP 47, e.g. "pt-BR"; it follows a per-app language), or else
    the Mac's current locale. Brazil maps to "pt-BR" only in the 1.4.3 build and in Breath of the Wild 1.9.0, whose RomFS have the official USpt text.
@@ -293,6 +336,7 @@ static uint64_t desired_language(void) {
     if(k==4&&!script[0]&&isalpha((unsigned char)p[0])&&isalpha((unsigned char)p[3])){for(size_t i=0;i<4;i++)script[i]=(char)(i?tolower((unsigned char)p[i]):toupper((unsigned char)p[i]));}
     p+=k;}
   } else {
+#ifndef __ANDROID__
    CFLocaleRef locale=CFLocaleCopyCurrent();
    CFStringRef value=CFLocaleGetValue(locale,kCFLocaleLanguageCode);
    if(value)CFStringGetCString(value,language,sizeof(language),kCFStringEncodingUTF8);
@@ -300,6 +344,9 @@ static uint64_t desired_language(void) {
    if(value)CFStringGetCString(value,script,sizeof(script),kCFStringEncodingUTF8);
    value=CFLocaleGetValue(locale,kCFLocaleCountryCode);
    if(value)CFStringGetCString(value,region,sizeof(region),kCFStringEncodingUTF8);CFRelease(locale);
+#else
+   strcpy(language,"en");
+#endif
   }
 #if defined(TOTK_GAME_V143) || defined(GAME_BOTW190)
   const char *portuguese=!strcmp(region,"BR")?"pt-BR":"pt";
@@ -317,6 +364,7 @@ static uint64_t desired_language(void) {
 /* One line per game allocation came in bursts of 1000-3000 while the world streams (each a write to the log),
    so only failures are logged unless TOTK_TRACE_ALLOC=1. */
 static int trace_alloc(void){static int v=-1;if(v<0){const char *e=getenv("TOTK_TRACE_ALLOC");v=e&&*e&&strcmp(e,"0");}return v;}
+#ifndef __ANDROID__
 static uint32_t observed_region(uint64_t *out,uint64_t size){
  uint8_t *fn=runtime_symbol("_ZN2nn2os21AllocateAddressRegionEPmm");uint32_t r=((uint32_t(*)(uint64_t *,uint64_t))fn)(out,size);
  if(r||trace_alloc())fprintf(stderr,"[totk] AllocateAddressRegion size=%llx result=%x address=%llx\n",(unsigned long long)size,r,(unsigned long long)(r?0:*out));
@@ -333,6 +381,7 @@ void *runtime_observer(const char *name) {
  {"_ZN2nn2os21AllocateAddressRegionEPmm",observed_region},{"_ZN2nn2os19AllocateMemoryPagesEmm",observed_pages},{"nnosInitialize",observed_os_init},{"nninitInitializeSdkModule",observed_sdk_init},{"nninitStartup",observed_startup},{"nnMain",observed_main}};
  for(size_t i=0;i<sizeof(entries)/sizeof(entries[0]);i++)if(!strcmp(name,entries[i].name))return entries[i].fn;return NULL;
 }
+#endif
 void *runtime_override(const char *name) {
  static const struct {const char *name;void *fn;} entries[]={
   {"_ZN2nn2oe18GetDesiredLanguageEv",desired_language},
@@ -347,6 +396,7 @@ void *runtime_override(const char *name) {
  for(size_t i=0;i<sizeof(entries)/sizeof(entries[0]);i++)if(!strcmp(name,entries[i].name))return entries[i].fn;
  void *input=runtime_input_override(name);if(input)return input;void *font=runtime_font_override(name);if(font)return font;void *codec=runtime_codec_override(name);if(codec)return codec;void *movie=runtime_movie_override(name);if(movie)return movie;void *clock=runtime_time_override(name);if(clock)return clock;void *applet=runtime_applet_override(name);if(applet)return applet;void *swkbd=runtime_swkbd_override(name);if(swkbd)return swkbd;void *account=runtime_account_override(name);if(account)return account;void *fs=runtime_fs_override(name);if(fs)return fs;void *front=runtime_front_override(name);return front?front:runtime_gfx_override(name);
 }
+#ifndef __ANDROID__
 void runtime_core_checkpoint(void);
 #ifdef GAME_BOTW
 /* Breath of the Wild (botw.md): the preemption point is also after every SVC. A thread the SVC woke competes for a core at
@@ -437,3 +487,5 @@ uint64_t runtime_svc(unsigned num,uint64_t *r,const char *module,uint64_t offset
 #ifdef GAME_BOTW
 #undef runtime_svc
 #endif
+
+#endif /* Darwin service dispatcher */

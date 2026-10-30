@@ -1,0 +1,6 @@
+Mesa Freedreno Turnip Android Vulkan driver
+Source: https://github.com/tencentmalos/mesa-mirror
+Commit: 68dafb89a26adefeaa12411f08e841aaf0b57384
+Copyright (C) various Mesa contributors; individual source notices apply.
+The APK contains turnip/identity.json with the build recipe and binary identity.
+See mesa-license.rst and mesa-MIT.txt for license terms.

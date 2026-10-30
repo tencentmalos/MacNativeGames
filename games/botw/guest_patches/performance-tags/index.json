@@ -1,0 +1,37 @@
+{
+  "schema": "spatial.guest-symbol-index.v2",
+  "bundle_id": "macnative-botw160-performance-tags",
+  "revision": 1,
+  "targets": [
+    {
+      "target_id": "botw160-main",
+      "scope": "title-module",
+      "emulator_family": "native-switch",
+      "emulator": "MacNativeGames",
+      "program_id": "01007ef00011e000",
+      "module_name": "main",
+      "source_sha256": "15cfca7b89348956f85d945fade2e215a6af5991ed1071e181f97ca72f7ae20b",
+      "compatible_runtime_sha256": [
+        "cf5d57a21cd85a627de7c9c500957d971b81b6aebbc3360ed78edbe350b41884"
+      ],
+      "compatible_build_ids": [
+        "8e9978d50bdd20b4c8395a106c27ffde00000000000000000000000000000000"
+      ],
+      "address_model": "module-relative",
+      "architecture": "aarch64",
+      "byte_order": "little",
+      "toolchain_target": "aarch64-none-elf"
+    }
+  ],
+  "shards": [
+    {
+      "target_id": "botw160-main",
+      "path": "botw160.symbols.json",
+      "sha256": "9a1ffb7694bd83d2f5437cee02ba80193183407f51964d17b7959c174f10b209"
+    }
+  ],
+  "annotations": {
+    "implementation": "Native entry forwarding on original guest stack; not a reconstructed implementation or translator adapter",
+    "scope": "Phase invocation IDs, not Guest frame or Present IDs"
+  }
+}

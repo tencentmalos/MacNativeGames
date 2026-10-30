@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Local LLDB/RenderDoc control sockets; release builds do not need networking. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application>
+        <service android:name=".PortDebugService" android:process=":game"
+            android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>
