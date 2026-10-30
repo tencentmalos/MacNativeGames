@@ -32,6 +32,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/prepare_warm_jobs.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/prepare_preparation.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/prepare_live_flush.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/prepare_s3_profile.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/live_ranges.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/preparation_plan.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/preparation_plan_engine.inc"

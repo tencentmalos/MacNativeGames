@@ -896,6 +896,8 @@ extern "C" void mng_execute_present(const win_t *window,const tex_t *texture,con
 '''
 from prepare_live_flush import adapt as adapt_live_flush
 text=adapt_live_flush(text,adapter)
+from prepare_s3_profile import adapt as adapt_s3_profile
+text=adapt_s3_profile(text,adapter)
 destination.write_text(text)
 
 texture_source=source.parent/"xbg_texture.c"

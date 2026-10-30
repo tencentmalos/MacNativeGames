@@ -2,6 +2,7 @@
 // Included after descriptor construction and before draw(). Translation owns
 // the renderer mutex; none of these checks acquires a slot or a GPU resource.
 namespace mng_reads {
+uint64_t sampled_range_visits=0;
 bool &buffer_filter(){static bool on=[] {const char *v=getenv("MNG_PREFLIGHT_BUFFER_FILTER");return !v || strcmp(v,"0");}();return on;}
 bool enabled() {
     static const bool value=[] {const char *v=getenv("MNG_RANGE_PREFLIGHT");return !v || strcmp(v,"0");}();
@@ -18,6 +19,8 @@ bool gpu_view(uint64_t address,uint64_t bytes,VkDeviceSize alignment) {
     return false;
 }
 void range(uint64_t address,uint64_t bytes,unsigned why,VkDeviceSize alignment=0) {
+    spatial::LiteTraceScope detail_scope;
+    if(mng::profile::detailedCpu()){detail_scope.begin("NVN.CpuRead.RangeCheck");++sampled_range_visits;}
     if(!address || !bytes)return; // The consuming operation validates bindings.
     need(xbg_wb_range_valid(address,bytes),"Preflight range overflow");
     if(alignment && gpu_view(address,bytes,alignment))return;
@@ -53,12 +56,19 @@ void operation(bool compute,const p_draw_idx *indexed=nullptr,int count=0) {
     if(pending_writebacks.empty() && pending_reports.empty())return;
     spatial::LiteTraceScope scope("NVN.CpuRead.Preflight");
     ++checked;
+    const bool detail=mng::profile::detailedCpu();
+    const auto ranges_before=sampled_range_visits;
+    unsigned binding_visits=0;
+    std::optional<spatial::LiteTraceScope> section;
+    if(detail)section.emplace("NVN.CpuRead.Plan");
     // Only the range shapes are cached. Pending GPU results are checked below
     // on every operation, through the unchanged range/cpu_access path.
     using Range=mng::vulkan::preparation::StorageRange;
     static std::vector<Range> ranges;ranges.clear();
     const auto *prepared_ranges=mng_prepare::storage_ranges(compute);
+    section.reset();if(detail)section.emplace("NVN.CpuRead.Bindings");
     mng_prepare::elements(compute,[&](Shader &shader,unsigned st,unsigned ns,const xbg_shader_binding &b,unsigned i,bool written){
+        if(detail)++binding_visits;
         if(buffer_filter() && pending_writebacks.empty() && b.type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
            (b.source==XBG_SOURCE_UNIFORM || b.source==XBG_SOURCE_STORAGE))return true;
         const unsigned slot=b.slot+i;
@@ -89,11 +99,13 @@ void operation(bool compute,const p_draw_idx *indexed=nullptr,int count=0) {
         }
         return true;
     });
+    section.reset();if(detail)section.emplace("NVN.CpuRead.Storage");
     if(!prepared_ranges){mng::vulkan::preparation::merge_ranges(ranges);prepared_ranges=&ranges;}
     for(const auto &merged:*prepared_ranges)
         range(merged.begin,merged.end-merged.begin,merged.written?3:1,
               merged.written?1:properties.limits.minStorageBufferOffsetAlignment);
     if(!compute){
+        section.reset();if(detail)section.emplace("NVN.CpuRead.VertexIndex");
         if((!buffer_filter() || !pending_writebacks.empty()) && state.shader[0])for(auto loc:state.shader[0]->inputs){
             need(loc<16,"Preflight vertex location out of range");va_st attr;memcpy(&attr,&state.attrib[loc],sizeof(attr));
             if(attr.fmt){need(attr.stream<16,"Preflight vertex stream out of range");auto r=state.vb[attr.stream];range(r.address,r.size,1,4);}
@@ -103,9 +115,15 @@ void operation(bool compute,const p_draw_idx *indexed=nullptr,int count=0) {
         if(indexed && count>0 && (!buffer_filter() || !pending_writebacks.empty() || !indexed->itype)){need(indexed->itype>=0 && indexed->itype<=2,"Preflight index type out of range");
             range(indexed->ibuf,uint64_t(count)*(1u<<indexed->itype),indexed->itype?1:5,indexed->itype?4:0);}
         if(g_ui_rect_fn){auto v=state.vb[0],u=state.ub[0][0];range(v.address,v.size,5);range(u.address,u.size,5);}
+        section.reset();if(detail)section.emplace("NVN.CpuRead.Targets");
         need(state.rt.n>=0 && state.rt.n<=8,"Preflight target count out of range");
         for(int i=0;i<state.rt.n;++i)texture(state.rt.color[i],false);
         texture(state.rt.depth,false);
+    }
+    section.reset();
+    if(detail){
+        spatial::LiteTrace::counter("NVN.CpuRead.SampledBindingVisits",binding_visits);
+        spatial::LiteTrace::counter("NVN.CpuRead.SampledRangeVisits",sampled_range_visits-ranges_before);
     }
 }
 struct Guard {

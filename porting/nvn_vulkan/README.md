@@ -183,3 +183,9 @@ Litep 显示条件等待和翻译 CPU 时间下降，剩余前端锁热点仍为
 其中线程CPU约23.6ms，不把scope elapsed等同调度等待。
 [ADPF实验](ODIN3_ADPF_20261028.md)保持默认OFF：四窗合并+1.942%，长窗口因进程退出
 中断，未达到验收条件。下一项为S3 Draw细分抽样与预检降本，Mac/Android继续共用Vulkan。
+
+## 2026-10-30：S3 诊断检查点
+
+[Draw 与范围预检诊断](ODIN3_PIPELINE_S3_20261030.md)将同一次抽样扩展到预检，
+细分 descriptor、snapshot 和绑定遍历。两端构建及 Mac 三模式 GPU 探针通过；
+Odin3 的恢复稳定性检查失败，尚无有效细分采样或 S3 优化收益结论。

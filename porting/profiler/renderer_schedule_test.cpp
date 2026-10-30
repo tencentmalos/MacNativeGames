@@ -100,6 +100,19 @@ int main(){
     // every emitter below is a no-op and cannot exercise string interning.
     spatial::ProfilerRing::FrameMark();
     assert(spatial::ProfilerRing::Enabled());
+    // One selection covers preflight and the whole draw, including nested
+    // helpers. Nested scopes must not advance or override the outer stride.
+    assert(command("profiler_detail start 32").find("error=")==std::string::npos);
+    unsigned selected=0;
+    for(unsigned i=0;i<96;++i){
+        mng::profile::CpuDetailDrawScope draw;
+        const bool detail=mng::profile::detailedCpu();selected+=detail;
+        {mng::profile::CpuDetailDrawScope nested;assert(mng::profile::detailedCpu()==detail);}
+        assert(mng::profile::detailedCpu()==detail);
+    }
+    assert(selected==3);
+    command("profiler_detail stop");
+    {mng::profile::CpuDetailDrawScope draw;assert(!mng::profile::detailedCpu());}
     mng_lane_accounting lanes{};mng_lane_reset(&lanes,1);
     mng_lane_find(&lanes,1,0x8001);mng_lane_find(&lanes,2,0x20004);
     const uint64_t zero[3]{};
